@@ -7,7 +7,9 @@
 #property strict
 
 #include <Trade/Trade.mqh>
+#include <Trade/PositionInfo.mqh>
 CTrade trade;
+CPositionInfo pos;
 
 // ---- Inputs (keep boring) ----
 input string InpSymbol            = "EURUSD";   // Trade symbol (set to EURUSD for simplest pass)
@@ -61,12 +63,12 @@ bool IsNewBar()
 
 bool HasOpenPosition()
 {
-   for(int i=0; i<PositionsTotal(); i++)
+   for(int i = 0; i < PositionsTotal(); i++)
    {
-      if(PositionSelectByIndex(i))
+      if(pos.SelectByIndex(i))
       {
-         string sym = PositionGetString(POSITION_SYMBOL);
-         long magic = PositionGetInteger(POSITION_MAGIC);
+         string sym  = pos.Symbol();
+         long   magic = pos.Magic();
          if(sym == InpSymbol && magic == InpMagic)
             return true;
       }
