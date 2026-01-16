@@ -31,11 +31,17 @@ input int    InpMaxConsecLosses   = 2;          // Pause after this many consecu
 input double InpMaxDailyLossPct   = 1.5;        // Daily equity loss cap (% from day start)
 input double InpMaxDrawdownPct    = 5.0;        // Max peak-to-valley equity drawdown (%)
 input int    InpMaxTradesPerDay   = 2;          // Max trades per day
+input int    InpInactivityDays    = 12;         // Relax filters if no trades for this many days
+input double InpRelaxAtrFactor    = 0.5;        // ATR floor multiplier during inactivity relax (e.g., 0.5 = 50%)
+input double InpRiskTrimFactor    = 0.5;        // Trim risk by this factor in stressed conditions
+input double InpHighVolAtrMult    = 2.0;        // ATR (pips) threshold = MinAtrPips * this to trim risk
+input double InpHighSpreadFactor  = 0.8;        // If spread > MaxSpread * factor, trim risk
 input int    InpMagic             = 50525;      // Magic number
 
 // ---- Internal state ----
 datetime g_last_bar_time = 0;
 datetime g_last_close_time = 0;
+datetime g_last_trade_time = 0;
 datetime g_day_anchor = 0;
 double   g_day_equity_start = 0.0;
 int      g_day_trades = 0;
@@ -127,6 +133,17 @@ void EnsureDayContext()
    }
 }
 
+// Check if inactivity window has been exceeded
+bool InactivityRelax()
+{
+   if(InpInactivityDays <= 0) return false;
+   datetime last = g_last_trade_time;
+   if(last == 0) return false;
+   double diff_sec = (double)(TimeCurrent() - last);
+   double threshold = InpInactivityDays * 24.0 * 3600.0;
+   return diff_sec >= threshold;
+}
+
 // Allow trading only inside defined session window
 bool SessionOk()
 {
@@ -160,12 +177,12 @@ bool SpreadOk()
 }
 
 // Risk-based lot size from % risk and SL distance (price units)
-double CalcLotsByRisk(double sl_distance_price)
+double CalcLotsByRisk(double sl_distance_price, double riskPercent)
 {
    if(sl_distance_price <= 0) return 0.0;
 
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double riskMoney = balance * (InpRiskPercent / 100.0);
+   double riskMoney = balance * (riskPercent / 100.0);
 
    // Tick value and tick size
    double tick_value = SymbolInfoDouble(InpSymbol, SYMBOL_TRADE_TICK_VALUE);
@@ -287,7 +304,28 @@ bool VolatilityOk(double atr_points)
    double pip = point * 10.0;
    if(pip <= 0) return false;
    double atr_pips = atr_points / pip;
-   return (atr_pips >= InpMinAtrPips);
+   double minAtr = InpMinAtrPips;
+   if(InactivityRelax() && InpRelaxAtrFactor > 0)
+      minAtr = InpMinAtrPips * InpRelaxAtrFactor;
+   return (atr_pips >= minAtr);
+}
+
+// Adjust risk percent under high spread or high ATR conditions
+double AdjustRiskPercent(double spread_points, double atr_points)
+{
+   double point = SymbolInfoDouble(InpSymbol, SYMBOL_POINT);
+   if(point <= 0) return InpRiskPercent;
+
+   double pip = point * 10.0;
+   double atr_pips = atr_points / pip;
+
+   bool highSpread = (spread_points > InpMaxSpreadPoints * InpHighSpreadFactor);
+   bool highVol    = (atr_pips >= InpMinAtrPips * InpHighVolAtrMult);
+
+   if((highSpread || highVol) && InpRiskTrimFactor > 0.0)
+      return InpRiskPercent * InpRiskTrimFactor;
+
+   return InpRiskPercent;
 }
 
 // Pause trading after too many consecutive losses
@@ -362,7 +400,9 @@ void TryEnter()
    if(!StopsLevelOk(entry, sl, tp)) return;
 
    // Lot size by risk
-   double lots = CalcLotsByRisk(MathAbs(entry - sl));
+   double spread_pts = (double)SymbolInfoInteger(InpSymbol, SYMBOL_SPREAD);
+   double effRisk = AdjustRiskPercent(spread_pts, atr);
+   double lots = CalcLotsByRisk(MathAbs(entry - sl), effRisk);
    if(lots <= 0) return;
 
    trade.SetExpertMagicNumber(InpMagic);
@@ -376,7 +416,10 @@ void TryEnter()
 
    // If order sent, we’re done.
    if(ok)
+   {
       g_day_trades++;
+      g_last_trade_time = TimeCurrent();
+   }
    else
       PrintFormat("Order send failed (buy=%s, sell=%s), last_error=%d",
                   buySignal ? "1" : "0",
@@ -400,6 +443,7 @@ int OnInit()
 
    g_last_bar_time = 0;
    g_last_close_time = 0;
+   g_last_trade_time = 0;
    g_day_anchor = DayAnchor(TimeCurrent());
    g_day_equity_start = AccountInfoDouble(ACCOUNT_EQUITY);
    g_day_trades = 0;
@@ -448,4 +492,5 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
    datetime t = (datetime)HistoryDealGetInteger(deal, DEAL_TIME);
    if(t > g_last_close_time)
       g_last_close_time = t;
+   g_last_trade_time = t;
 }
