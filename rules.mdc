@@ -1,0 +1,24 @@
+use any EA you have in your trading account, as long as it does not:
+
+Copy trades of other person's signals
+Do tick scalping
+Perform latency arbitrage trading
+Perform reverse arbitrage trading
+Perform hedge arbitrage trading
+Perform High-frequency trading
+Use emulators
+Any accounts using these types of EAs will be canceled, banned, and not refunded.
+
+The stop-loss order has to be visible in the trading platform, so you cannot use a ‘stealth mode’ stop-loss.
+
+Must be compliant with 5ers prop trading and pass its bootcamp's Stage 1 requirements: 25k account → 6% profit target with guidelines below:
+
+EURUSD first (can be adapted to others like XAUUSD if needed)
+H1 only
+EMA200 trend filter
+Pullback entry (price crosses EMA20 back in trend direction)
+1 position max
+Mandatory SL/TP
+Risk per trade = 0.25% default
+Cooldown after a trade
+No grid / no martingale / no recovery / no news logic
