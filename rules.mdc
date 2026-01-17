@@ -8,10 +8,11 @@ Perform hedge arbitrage trading
 Perform High-frequency trading
 Use emulators
 Any accounts using these types of EAs will be canceled, banned, and not refunded.
+No grid / no martingale / no recovery / no news logic 
 
 The stop-loss order has to be visible in the trading platform, so you cannot use a ‘stealth mode’ stop-loss.
 
-Must be compliant with 5ers prop trading and pass its bootcamp's Stage 1 requirements: 25k account → 6% profit target with guidelines below:
+Must be compliant with 5ers prop trading and pass its bootcamp's Stage 1 requirements: $25k account → 6% profit target with non-strict guidelines below:
 
 EURUSD first (can be adapted to others like XAUUSD if needed)
 H1 only
@@ -21,4 +22,3 @@ Pullback entry (price crosses EMA20 back in trend direction)
 Mandatory SL/TP
 Risk per trade = 0.25% default
 Cooldown after a trade
-No grid / no martingale / no recovery / no news logic

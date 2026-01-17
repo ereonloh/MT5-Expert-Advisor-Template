@@ -34,9 +34,6 @@ int handleFast, handleSlow;
 double g_spread_hist[3] = {0,0,0};
 int    g_spread_idx = 0;
 bool   g_spread_filled = false;
-datetime g_day_anchor = 0;
-int      g_day_trades = 0;
-int      g_consec_losses = 0;
 datetime g_last_close_time = 0;
 
 // Pip & slippage utilities
@@ -127,7 +124,7 @@ bool PositionExists()
 }
 
 // Require EMA200 to have a modest slope to confirm trend (avoid flat filters)
-bool TrendOk(const double emaS[])
+bool TrendOk(const double &emaS[])
 {
    // emaS[0]=current, emaS[1]=prev, emaS[2]=prev2 (already copied)
    double slopeUp   = emaS[0] - emaS[2];
@@ -145,27 +142,54 @@ datetime DayAnchor(datetime t)
    return StructToTime(dt);
 }
 
+string GVPrefix()
+{
+   return StringFormat("ICM_EA_%d_", InpMagicNum);
+}
+
+string GVKey(const string suffix)
+{
+   return GVPrefix() + suffix;
+}
+
+double GVGet(const string key, const double def = 0.0)
+{
+   if(!GlobalVariableCheck(key)) return def;
+   return GlobalVariableGet(key);
+}
+
+void GVSet(const string key, const double value)
+{
+   GlobalVariableSet(key, value);
+}
+
 void EnsureDayContext()
 {
    datetime today = DayAnchor(TimeCurrent());
-   if(g_day_anchor != today)
+   string keyDay = GVKey("last_day");
+   string keyTrades = GVKey("day_trades");
+   string keyLosses = GVKey("consec_losses");
+   datetime storedDay = (datetime)GVGet(keyDay, 0.0);
+   if(storedDay != today)
    {
-      g_day_anchor = today;
-      g_day_trades = 0;
-      g_consec_losses = 0;
+      GVSet(keyDay, (double)today);
+      GVSet(keyTrades, 0.0);
+      GVSet(keyLosses, 0.0);
    }
 }
 
 bool TradesPerDayOk()
 {
    if(InpMaxTradesPerDay <= 0) return true;
-   return g_day_trades < InpMaxTradesPerDay;
+   double trades = GVGet(GVKey("day_trades"), 0.0);
+   return trades < InpMaxTradesPerDay;
 }
 
 bool LossStreakOk()
 {
    if(InpMaxConsecLosses <= 0) return true;
-   return g_consec_losses < InpMaxConsecLosses;
+   double losses = GVGet(GVKey("consec_losses"), 0.0);
+   return losses < InpMaxConsecLosses;
 }
 
 bool CooldownOk()
@@ -270,7 +294,11 @@ void OnTick()
                (postSend - preSend));
 
    if(ok)
-      g_day_trades++;
+   {
+      string keyTrades = GVKey("day_trades");
+      double trades = GVGet(keyTrades, 0.0);
+      GVSet(keyTrades, trades + 1.0);
+   }
 }
 
 // Lot size from % risk and SL distance (price units)
@@ -328,14 +356,19 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
    if(entry != DEAL_ENTRY_OUT)
       return;
 
+   EnsureDayContext();
+
    double profit = HistoryDealGetDouble(deal, DEAL_PROFIT)
                  + HistoryDealGetDouble(deal, DEAL_SWAP)
                  + HistoryDealGetDouble(deal, DEAL_COMMISSION);
 
+   string keyLosses = GVKey("consec_losses");
+   double losses = GVGet(keyLosses, 0.0);
    if(profit < 0)
-      g_consec_losses++;
+      losses++;
    else
-      g_consec_losses = 0;
+      losses = 0.0;
+   GVSet(keyLosses, losses);
 
    datetime t = (datetime)HistoryDealGetInteger(deal, DEAL_TIME);
    if(t > g_last_close_time)
@@ -350,45 +383,37 @@ void ManageBreakeven()
 
    for(int i = PositionsTotal() - 1; i >= 0; --i)
    {
-       if(!pos.SelectByIndex(i)) continue;
-       if(pos.Magic() != InpMagicNum || pos.Symbol() != _Symbol) continue;
+      if(!pos.SelectByIndex(i)) continue;
+      if(pos.Magic() != InpMagicNum || pos.Symbol() != _Symbol) continue;
 
-       double entry = pos.PriceOpen();
-       double sl    = pos.SL();
-       double tp    = pos.TP();
-       long   type  = pos.PositionType();
+      double entry = pos.PriceOpen();
+      double sl    = pos.StopLoss();
+      double tp    = pos.TakeProfit();
+      long   type  = pos.PositionType();
 
-       double riskDist = MathAbs(entry - sl);
-       if(riskDist <= 0) continue;
+      double riskDist = MathAbs(entry - sl);
+      if(riskDist <= 0) continue;
 
-       double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-       double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-       double current = (type == POSITION_TYPE_BUY) ? bid : ask;
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double current = (type == POSITION_TYPE_BUY) ? bid : ask;
 
-       // Has price reached 1R?
-       if(MathAbs(current - entry) < riskDist) continue;
+      // Has price reached 1R?
+      if(MathAbs(current - entry) < riskDist) continue;
 
-       double newSL = sl;
-       if(type == POSITION_TYPE_BUY)
-          newSL = entry + beOffset;
-       else
-          newSL = entry - beOffset;
+      double newSL = (type == POSITION_TYPE_BUY) ? (entry + beOffset) : (entry - beOffset);
 
-       // Do not move SL past TP
-       if(type == POSITION_TYPE_BUY && newSL >= tp) continue;
-       if(type == POSITION_TYPE_SELL && newSL <= tp) continue;
+      // Do not move SL past TP
+      if(type == POSITION_TYPE_BUY && newSL >= tp) continue;
+      if(type == POSITION_TYPE_SELL && newSL <= tp) continue;
 
-       int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-       newSL = NormalizeDouble(newSL, digits);
+      int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+      newSL = NormalizeDouble(newSL, digits);
 
-       if(trade.PositionModify(_Symbol, newSL, tp))
-       {
-          PrintFormat("BREAKEVEN: moved SL to %.5f (entry=%.5f, tp=%.5f)", newSL, entry, tp);
-       }
-       else
-       {
-          PrintFormat("BREAKEVEN FAILED: last_error=%d", _LastError);
-       }
+      if(trade.PositionModify(_Symbol, newSL, tp))
+         PrintFormat("BREAKEVEN: moved SL to %.5f (entry=%.5f, tp=%.5f)", newSL, entry, tp);
+      else
+         PrintFormat("BREAKEVEN FAILED: last_error=%d", _LastError);
    }
 }
 

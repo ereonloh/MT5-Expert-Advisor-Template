@@ -11,34 +11,36 @@
 CTrade trade;
 CPositionInfo pos;
 
-// ---- Inputs (keep boring) ----
-input string InpSymbol            = "EURUSD";   // Trade symbol (set to EURUSD for simplest pass)
+// ---- Inputs ----
+input string InpSymbol            = "EURUSD";   // Trade symbol
 input ENUM_TIMEFRAMES InpTF       = PERIOD_H1;  // Timeframe (H1)
 input double InpRiskPercent       = 0.25;       // Risk per trade (% of balance)
 input int    InpEMATrendPeriod    = 200;        // Trend filter EMA
 input int    InpEMAPullbackPeriod = 20;         // Pullback EMA
 input int    InpATRPeriod         = 14;         // ATR for SL distance
-input double InpSL_ATR_Mult       = 2.0;        // SL = ATR * multiplier
+input double InpSL_ATR_Mult       = 1.8;        // SL = ATR * multiplier
 input double InpTP_RR             = 2.0;        // TP = RR * SL
 input int    InpCooldownMinutes   = 240;        // Wait after closing a trade
-input int    InpMaxSpreadPoints   = 25;         // Max spread (points) to allow entry
-input int    InpStartHour         = 8;          // Session start hour (server time)
-input int    InpEndHour           = 20;         // Session end hour (server time)
-input int    InpRolloverHourStart = 21;         // Skip trading from this hour (server)
-input int    InpRolloverHourEnd   = 23;         // Skip trading until this hour (inclusive)
-input double InpMinAtrPips        = 8.0;        // Minimum ATR (pips) to allow trading
-input int    InpMaxConsecLosses   = 2;          // Pause after this many consecutive losses
-input double InpMaxDailyLossPct   = 1.5;        // Daily equity loss cap (% from day start)
-input double InpMaxDrawdownPct    = 5.0;        // Max peak-to-valley equity drawdown (%)
+input int    InpMaxSpreadPoints   = 60;         // Max spread (points)
+input int    InpStartHour         = 8;          // Session start hour
+input int    InpEndHour           = 20;         // Session end hour
+input int    InpRolloverHourStart = 21;         // Skip trading from this hour
+input int    InpRolloverHourEnd   = 23;         // Skip trading until this hour
+input double InpMinAtrPips        = 7.0;        // Minimum ATR (pips)
+input int    InpMaxConsecLosses   = 2;          // Pause after consecutive losses
+input double InpMaxDailyLossPct   = 1.5;        // Daily equity loss cap (%)
+input double InpMaxDrawdownPct    = 5.0;        // Max drawdown (%)
 input int    InpMaxTradesPerDay   = 2;          // Max trades per day
-input int    InpInactivityDays    = 12;         // Relax filters if no trades for this many days
-input double InpRelaxAtrFactor    = 0.5;        // ATR floor multiplier during inactivity relax (e.g., 0.5 = 50%)
-input double InpRiskTrimFactor    = 0.5;        // Trim risk by this factor in stressed conditions
-input double InpHighVolAtrMult    = 2.0;        // ATR (pips) threshold = MinAtrPips * this to trim risk
-input double InpHighSpreadFactor  = 0.8;        // If spread > MaxSpread * factor, trim risk
+input int    InpInactivityDays    = 12;         // Relax filters after inactivity
+input double InpRelaxAtrFactor    = 0.5;        // ATR floor multiplier during relax
+input double InpRiskTrimFactor    = 0.6;        // Trim risk factor
+input double InpHighVolAtrMult    = 2.5;        // High vol ATR multiplier
+input double InpHighSpreadFactor  = 0.9;        // High spread factor
+input int    InpEmaTouchPoints    = 5;          // EMA20 touch tolerance (points)
 input int    InpMagic             = 50525;      // Magic number
 
 // ---- Internal state ----
+string   g_symbol = "";
 datetime g_last_bar_time = 0;
 datetime g_last_close_time = 0;
 datetime g_last_trade_time = 0;
@@ -53,11 +55,49 @@ int      g_handleEmaPull  = INVALID_HANDLE;
 //+------------------------------------------------------------------+
 //| Helpers                                                          |
 //+------------------------------------------------------------------+
+string ResolveSymbol()
+{
+   if(InpSymbol == "")
+      return _Symbol;
+   if(SymbolSelect(InpSymbol, true))
+      return InpSymbol;
+   if(StringFind(_Symbol, InpSymbol) == 0)
+      return _Symbol;
 
-// Ensure we act only once per completed bar (no overtrading on ticks)
+   int total = SymbolsTotal(false);
+   for(int i = 0; i < total; i++)
+   {
+      string name = SymbolName(i, false);
+      if(StringFind(name, InpSymbol) == 0)
+      {
+         SymbolSelect(name, true);
+         return name;
+      }
+   }
+   return InpSymbol;
+}
+
+string GvKey(const string suffix)
+{
+   return (string)InpMagic + "_" + suffix;
+}
+
+double GvGetOrInit(const string key, double init_value)
+{
+   if(GlobalVariableCheck(key))
+      return GlobalVariableGet(key);
+   GlobalVariableSet(key, init_value);
+   return init_value;
+}
+
+void GvSet(const string key, double value)
+{
+   GlobalVariableSet(key, value);
+}
+
 bool IsNewBar()
 {
-   datetime t = iTime(InpSymbol, InpTF, 0);
+   datetime t = iTime(g_symbol, InpTF, 0);
    if(t == 0) return false;
    if(t != g_last_bar_time)
    {
@@ -75,7 +115,7 @@ bool HasOpenPosition()
       {
          string sym  = pos.Symbol();
          long   magic = pos.Magic();
-         if(sym == InpSymbol && magic == InpMagic)
+         if(sym == g_symbol && magic == InpMagic)
             return true;
       }
    }
@@ -84,7 +124,7 @@ bool HasOpenPosition()
 
 double GetATR(int period)
 {
-   int handle = iATR(InpSymbol, InpTF, period);
+   int handle = iATR(g_symbol, InpTF, period);
    if(handle == INVALID_HANDLE) return 0.0;
 
    double buf[];
@@ -98,7 +138,6 @@ double GetATR(int period)
    return buf[0];
 }
 
-// Read a value from a prebuilt EMA handle (keeps handles reusable)
 double GetEMAHandle(int handle, int shift)
 {
    if(handle == INVALID_HANDLE) return 0.0;
@@ -120,7 +159,6 @@ datetime DayAnchor(datetime t)
    return StructToTime(dt);
 }
 
-// Reset daily counters (equity baseline, trade count, loss streak)
 void EnsureDayContext()
 {
    datetime today = DayAnchor(TimeCurrent());
@@ -130,10 +168,13 @@ void EnsureDayContext()
       g_day_equity_start = AccountInfoDouble(ACCOUNT_EQUITY);
       g_day_trades = 0;
       g_consec_losses = 0;
+      GvSet(GvKey("day_anchor"), (double)g_day_anchor);
+      GvSet(GvKey("day_equity_start"), g_day_equity_start);
+      GvSet(GvKey("day_trades"), (double)g_day_trades);
+      GvSet(GvKey("consec_losses"), (double)g_consec_losses);
    }
 }
 
-// Check if inactivity window has been exceeded
 bool InactivityRelax()
 {
    if(InpInactivityDays <= 0) return false;
@@ -144,7 +185,6 @@ bool InactivityRelax()
    return diff_sec >= threshold;
 }
 
-// Allow trading only inside defined session window
 bool SessionOk()
 {
    MqlDateTime dt;
@@ -156,7 +196,6 @@ bool SessionOk()
    return true;
 }
 
-// Skip trading around rollover / swap hours
 bool RolloverOk()
 {
    MqlDateTime dt;
@@ -165,18 +204,15 @@ bool RolloverOk()
       return true;
    if(InpRolloverHourStart <= InpRolloverHourEnd)
       return !(dt.hour >= InpRolloverHourStart && dt.hour <= InpRolloverHourEnd);
-   // If start > end (wrap midnight), block outside the allowed window
    return (dt.hour > InpRolloverHourEnd && dt.hour < InpRolloverHourStart);
 }
 
-// Basic spread guard
 bool SpreadOk()
 {
-   int spread = (int)SymbolInfoInteger(InpSymbol, SYMBOL_SPREAD);
-   return (spread > 0 && spread <= InpMaxSpreadPoints);
+   int spread = (int)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD);
+   return (spread >= 0 && spread <= InpMaxSpreadPoints);
 }
 
-// Risk-based lot size from % risk and SL distance (price units)
 double CalcLotsByRisk(double sl_distance_price, double riskPercent)
 {
    if(sl_distance_price <= 0) return 0.0;
@@ -184,49 +220,42 @@ double CalcLotsByRisk(double sl_distance_price, double riskPercent)
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double riskMoney = balance * (riskPercent / 100.0);
 
-   // Tick value and tick size
-   double tick_value = SymbolInfoDouble(InpSymbol, SYMBOL_TRADE_TICK_VALUE);
-   double tick_size  = SymbolInfoDouble(InpSymbol, SYMBOL_TRADE_TICK_SIZE);
+   double tick_value = SymbolInfoDouble(g_symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tick_size  = SymbolInfoDouble(g_symbol, SYMBOL_TRADE_TICK_SIZE);
 
    if(tick_value <= 0 || tick_size <= 0) return 0.0;
 
-   // How many ticks is the SL distance?
    double ticks = sl_distance_price / tick_size;
    if(ticks <= 0) return 0.0;
 
-   // Money per 1.0 lot if SL hits:
    double lossPerLot = ticks * tick_value;
-
    if(lossPerLot <= 0) return 0.0;
 
    double lots = riskMoney / lossPerLot;
 
-   // Normalize to broker constraints
-   double minLot  = SymbolInfoDouble(InpSymbol, SYMBOL_VOLUME_MIN);
-   double maxLot  = SymbolInfoDouble(InpSymbol, SYMBOL_VOLUME_MAX);
-   double lotStep = SymbolInfoDouble(InpSymbol, SYMBOL_VOLUME_STEP);
+   double minLot  = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MIN);
+   double maxLot  = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_STEP);
 
    if(lotStep <= 0) lotStep = 0.01;
 
-   // Clamp
    lots = MathMax(minLot, MathMin(maxLot, lots));
-
-   // Round down to step
    lots = MathFloor(lots / lotStep) * lotStep;
 
-   // Safety: if rounded to 0
    if(lots < minLot) lots = minLot;
 
    return lots;
 }
 
-// Daily loss cap, global drawdown cap, and trades-per-day guard
 bool RiskLimitsOk()
 {
    EnsureDayContext();
 
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   double prev_equity_high = g_equity_high;
    g_equity_high = MathMax(g_equity_high, eq);
+   if(g_equity_high != prev_equity_high)
+      GvSet(GvKey("equity_high"), g_equity_high);
 
    if(InpMaxDrawdownPct > 0.0)
    {
@@ -248,17 +277,14 @@ bool RiskLimitsOk()
    return true;
 }
 
-// Enforce cooldown between trades
 bool CooldownOk()
 {
    if(g_last_close_time == 0) return true;
    return (TimeCurrent() - g_last_close_time) >= (InpCooldownMinutes * 60);
 }
 
-// Find last close time for our symbol/magic (supports cooldown)
 void UpdateLastCloseTime()
 {
-   // Look for last close deal for our magic+symbol
    HistorySelect(TimeCurrent() - 7*24*3600, TimeCurrent());
 
    int deals = HistoryDealsTotal();
@@ -273,7 +299,7 @@ void UpdateLastCloseTime()
       long magic  = (long)HistoryDealGetInteger(ticket, DEAL_MAGIC);
       long entry  = (long)HistoryDealGetInteger(ticket, DEAL_ENTRY);
 
-      if(sym == InpSymbol && magic == InpMagic && entry == DEAL_ENTRY_OUT)
+      if(sym == g_symbol && magic == InpMagic && entry == DEAL_ENTRY_OUT)
       {
          datetime t = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
          if(t > last) last = t;
@@ -283,23 +309,21 @@ void UpdateLastCloseTime()
    g_last_close_time = last;
 }
 
-// Ensure SL/TP are outside broker minimum distance
 bool StopsLevelOk(double entry, double sl, double tp)
 {
-   int stops_level_points = (int)SymbolInfoInteger(InpSymbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double point = SymbolInfoDouble(InpSymbol, SYMBOL_POINT);
+   int stops_level_points = (int)SymbolInfoInteger(g_symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
    double min_dist = stops_level_points * point;
-   if(min_dist <= 0) return true; // broker says no restriction
+   if(min_dist <= 0) return true;
 
    if(MathAbs(entry - sl) < min_dist) return false;
    if(MathAbs(entry - tp) < min_dist) return false;
    return true;
 }
 
-// Require minimum ATR (converted to pips) to avoid dead markets
 bool VolatilityOk(double atr_points)
 {
-   double point = SymbolInfoDouble(InpSymbol, SYMBOL_POINT);
+   double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
    if(point <= 0) return false;
    double pip = point * 10.0;
    if(pip <= 0) return false;
@@ -310,10 +334,9 @@ bool VolatilityOk(double atr_points)
    return (atr_pips >= minAtr);
 }
 
-// Adjust risk percent under high spread or high ATR conditions
 double AdjustRiskPercent(double spread_points, double atr_points)
 {
-   double point = SymbolInfoDouble(InpSymbol, SYMBOL_POINT);
+   double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
    if(point <= 0) return InpRiskPercent;
 
    double pip = point * 10.0;
@@ -328,7 +351,6 @@ double AdjustRiskPercent(double spread_points, double atr_points)
    return InpRiskPercent;
 }
 
-// Pause trading after too many consecutive losses
 bool LossStreakOk()
 {
    if(InpMaxConsecLosses > 0 && g_consec_losses >= InpMaxConsecLosses)
@@ -341,11 +363,11 @@ bool LossStreakOk()
 //+------------------------------------------------------------------+
 void TryEnter()
 {
-   // Hard guards
    if(_Period != InpTF) return;
+   if(_Symbol != g_symbol) return;
    if(!SpreadOk()) return;
    if(!SessionOk()) return;
-    if(!RolloverOk()) return;
+   if(!RolloverOk()) return;
    if(!RiskLimitsOk()) return;
    if(!LossStreakOk()) return;
    if(HasOpenPosition()) return;
@@ -353,26 +375,28 @@ void TryEnter()
    if(!CooldownOk()) return;
 
    // Indicators
-   double emaTrend0 = GetEMAHandle(g_handleEmaTrend, 0);
    double emaTrend1 = GetEMAHandle(g_handleEmaTrend, 1);
-   double emaPull0  = GetEMAHandle(g_handleEmaPull, 0);
    double emaPull1  = GetEMAHandle(g_handleEmaPull, 1);
 
-   if(emaTrend0 == 0 || emaPull0 == 0) return;
+   if(emaTrend1 == 0 || emaPull1 == 0) return;
 
-   // Prices
-   double close0 = iClose(InpSymbol, InpTF, 0);
-   double close1 = iClose(InpSymbol, InpTF, 1);
+   // Prices (use last closed bar)
+   double close1 = iClose(g_symbol, InpTF, 1);
+   double low1   = iLow(g_symbol, InpTF, 1);
+   double high1  = iHigh(g_symbol, InpTF, 1);
 
-   if(close0 == 0 || close1 == 0) return;
+   if(close1 == 0 || low1 == 0 || high1 == 0) return;
 
-   // Trend direction (simple): price above EMA200 = uptrend, below = downtrend
-   bool upTrend   = (close1 > emaTrend1) && (emaTrend0 >= emaTrend1);
-   bool downTrend = (close1 < emaTrend1) && (emaTrend0 <= emaTrend1);
+   // Trend direction
+   bool upTrend   = (close1 > emaTrend1);
+   bool downTrend = (close1 < emaTrend1);
 
-   // Pullback trigger: close crosses EMA20 back in trend direction
-   bool buySignal  = upTrend   && (close1 < emaPull1) && (close0 > emaPull0);
-   bool sellSignal = downTrend && (close1 > emaPull1) && (close0 < emaPull0);
+   // Pullback trigger: wick touches EMA20 within tolerance
+   double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
+   double emaTouchTol = (point > 0.0 && InpEmaTouchPoints > 0) ? (InpEmaTouchPoints * point) : 0.0;
+   
+   bool buySignal  = upTrend && (close1 > emaPull1) && (low1 <= emaPull1 + emaTouchTol);
+   bool sellSignal = downTrend && (close1 < emaPull1) && (high1 >= emaPull1 - emaTouchTol);
 
    if(!buySignal && !sellSignal) return;
 
@@ -381,12 +405,12 @@ void TryEnter()
    if(atr <= 0) return;
    if(!VolatilityOk(atr)) return;
 
-   double sl_dist = atr * InpSL_ATR_Mult; // price distance
+   double sl_dist = atr * InpSL_ATR_Mult;
 
    // Prices for order
-   double bid = SymbolInfoDouble(InpSymbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(InpSymbol, SYMBOL_ASK);
-   int digits = (int)SymbolInfoInteger(InpSymbol, SYMBOL_DIGITS);
+   double bid = SymbolInfoDouble(g_symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(g_symbol, SYMBOL_ASK);
+   int digits = (int)SymbolInfoInteger(g_symbol, SYMBOL_DIGITS);
 
    double entry = buySignal ? ask : bid;
    double sl    = buySignal ? (entry - sl_dist) : (entry + sl_dist);
@@ -395,12 +419,11 @@ void TryEnter()
    sl = NormalizeDouble(sl, digits);
    tp = NormalizeDouble(tp, digits);
 
-   // Mandatory: SL must be valid
    if(sl <= 0 || tp <= 0) return;
    if(!StopsLevelOk(entry, sl, tp)) return;
 
    // Lot size by risk
-   double spread_pts = (double)SymbolInfoInteger(InpSymbol, SYMBOL_SPREAD);
+   double spread_pts = (double)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD);
    double effRisk = AdjustRiskPercent(spread_pts, atr);
    double lots = CalcLotsByRisk(MathAbs(entry - sl), effRisk);
    if(lots <= 0) return;
@@ -410,21 +433,17 @@ void TryEnter()
 
    bool ok = false;
    if(buySignal)
-      ok = trade.Buy(lots, InpSymbol, entry, sl, tp, "BootcampSafe BUY");
+      ok = trade.Buy(lots, g_symbol, entry, sl, tp, "BootcampSafe BUY");
    else if(sellSignal)
-      ok = trade.Sell(lots, InpSymbol, entry, sl, tp, "BootcampSafe SELL");
+      ok = trade.Sell(lots, g_symbol, entry, sl, tp, "BootcampSafe SELL");
 
-   // If order sent, we’re done.
    if(ok)
    {
       g_day_trades++;
       g_last_trade_time = TimeCurrent();
+      GvSet(GvKey("day_trades"), (double)g_day_trades);
+      GvSet(GvKey("last_trade_time"), (double)g_last_trade_time);
    }
-   else
-      PrintFormat("Order send failed (buy=%s, sell=%s), last_error=%d",
-                  buySignal ? "1" : "0",
-                  sellSignal ? "1" : "0",
-                  _LastError);
 }
 
 //+------------------------------------------------------------------+
@@ -432,29 +451,28 @@ void TryEnter()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   // Basic sanity checks and indicator handle setup
-   if(!SymbolSelect(InpSymbol, true))
+   g_symbol = ResolveSymbol();
+   if(!SymbolSelect(g_symbol, true))
       return(INIT_FAILED);
 
-   g_handleEmaTrend = iMA(InpSymbol, InpTF, InpEMATrendPeriod, 0, MODE_EMA, PRICE_CLOSE);
-   g_handleEmaPull  = iMA(InpSymbol, InpTF, InpEMAPullbackPeriod, 0, MODE_EMA, PRICE_CLOSE);
+   g_handleEmaTrend = iMA(g_symbol, InpTF, InpEMATrendPeriod, 0, MODE_EMA, PRICE_CLOSE);
+   g_handleEmaPull  = iMA(g_symbol, InpTF, InpEMAPullbackPeriod, 0, MODE_EMA, PRICE_CLOSE);
    if(g_handleEmaTrend == INVALID_HANDLE || g_handleEmaPull == INVALID_HANDLE)
       return(INIT_FAILED);
 
    g_last_bar_time = 0;
    g_last_close_time = 0;
-   g_last_trade_time = 0;
-   g_day_anchor = DayAnchor(TimeCurrent());
-   g_day_equity_start = AccountInfoDouble(ACCOUNT_EQUITY);
-   g_day_trades = 0;
-   g_equity_high = AccountInfoDouble(ACCOUNT_EQUITY);
-   g_consec_losses = 0;
+   g_day_anchor = (datetime)GvGetOrInit(GvKey("day_anchor"), (double)DayAnchor(TimeCurrent()));
+   g_day_equity_start = GvGetOrInit(GvKey("day_equity_start"), AccountInfoDouble(ACCOUNT_EQUITY));
+   g_day_trades = (int)GvGetOrInit(GvKey("day_trades"), 0.0);
+   g_equity_high = GvGetOrInit(GvKey("equity_high"), AccountInfoDouble(ACCOUNT_EQUITY));
+   g_consec_losses = (int)GvGetOrInit(GvKey("consec_losses"), 0.0);
+   g_last_trade_time = (datetime)GvGetOrInit(GvKey("last_trade_time"), 0.0);
    return(INIT_SUCCEEDED);
 }
 
 void OnTick()
 {
-   // Only act once per new H1 bar to avoid overtrading
    if(!IsNewBar()) return;
    TryEnter();
 }
@@ -474,7 +492,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
    long   magic = HistoryDealGetInteger(deal, DEAL_MAGIC);
    long   entry = HistoryDealGetInteger(deal, DEAL_ENTRY);
 
-   if(sym != InpSymbol || magic != InpMagic)
+   if(sym != g_symbol || magic != InpMagic)
       return;
 
    if(entry != DEAL_ENTRY_OUT)
@@ -493,4 +511,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
    if(t > g_last_close_time)
       g_last_close_time = t;
    g_last_trade_time = t;
+   GvSet(GvKey("consec_losses"), (double)g_consec_losses);
+   GvSet(GvKey("last_trade_time"), (double)g_last_trade_time);
+   GvSet(GvKey("day_trades"), (double)g_day_trades);
 }
