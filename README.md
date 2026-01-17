@@ -7,7 +7,7 @@ PropPullback_v2 is an H1 EMA200/EMA20 pullback EA tuned for IC Markets Raw. It k
 
 Key logic
 - Trend + trigger: EMA200 filter, EMA20 pullback cross.
-- SL/TP: fixed pip distances (inputs); lots sized to 0.25% balance risk.
+- SL/TP: fixed pip distances (inputs, now 15/30 pips by default); lots sized to 0.25% balance risk. Uses correct pip sizing for 3/4/5-digit symbols.
 - Execution: IOC fill, slippage capped via input; dynamic spread guard uses 3-sample avg * multiplier.
 - Breakeven: at 1R, SL moves to entry +0.5 pip.
 - New-bar only: avoids multiple entries per bar.

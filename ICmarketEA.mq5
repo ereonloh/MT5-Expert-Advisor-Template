@@ -11,8 +11,8 @@
 input double   InpRiskPerTrade   = 0.25;     // Risk per Trade (%)
 input int      InpFastEMA        = 20;       // Entry EMA (Signal)
 input int      InpSlowEMA        = 200;      // Trend EMA (Filter)
-input int      InpStopLossPips   = 150;      // Hard SL in Pips (15.0 pips)
-input int      InpTakeProfitPips = 300;      // TP in Pips (30.0 pips)
+input int      InpStopLossPips   = 15;       // Hard SL in pips (15.0 pips)
+input int      InpTakeProfitPips = 30;       // TP in pips (30.0 pips)
 input int      InpStartHour      = 8;        // Session start (server)
 input int      InpEndHour        = 20;       // Session end (server)
 input int      InpMagicNum       = 123456;   // Unique ID for Trades
@@ -40,11 +40,22 @@ int      g_consec_losses = 0;
 datetime g_last_close_time = 0;
 
 // Pip & slippage utilities
+// Pip size (price units per pip) for 3/4/5-digit symbols
 double PipPoints()
 {
-   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-   if(digits <= 0) return(_Point);
-   return(MathPow(10.0, -digits + 1)); // 1 pip = 10^( -digits + 1 )
+   return ((_Digits == 3 || _Digits == 5) ? 10.0 * _Point : _Point);
+}
+
+// Ensure SL/TP respect broker minimum distance
+bool StopsLevelOk(double entry, double sl, double tp)
+{
+   int stops = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double minDist = stops * point;
+   if(minDist <= 0) return true; // no restriction
+   if(MathAbs(entry - sl) < minDist) return false;
+   if(MathAbs(entry - tp) < minDist) return false;
+   return true;
 }
 
 double SlippagePoints()
@@ -248,9 +259,9 @@ void OnTick()
 
    bool ok = false;
    if(buySignal)
-      ok = trade.Buy(lots, _Symbol, entry, sl, tp, "Pullback BUY");
+      ok = trade.Buy(lots, _Symbol, 0.0, sl, tp, "Pullback BUY");   // use 0.0 to fill at market
    else if(sellSignal)
-      ok = trade.Sell(lots, _Symbol, entry, sl, tp, "Pullback SELL");
+      ok = trade.Sell(lots, _Symbol, 0.0, sl, tp, "Pullback SELL"); // use 0.0 to fill at market
 
    uint postSend = GetTickCount();
    PrintFormat("Order result ok=%s | last_error=%d | sendLatency=%ums",
