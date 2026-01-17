@@ -1,3 +1,40 @@
+ICmarketEA (PropPullback_v2 for IC Markets Raw)
+==============================================
+
+Overview
+--------
+PropPullback_v2 is an H1 EMA200/EMA20 pullback EA tuned for IC Markets Raw. It keeps risk small (0.25%/trade), uses IOC market execution, slippage limits, a dynamic spread filter, and a simple breakeven step. One position max per symbol/magic; no martingale/grid/arb; visible SL/TP.
+
+Key logic
+- Trend + trigger: EMA200 filter, EMA20 pullback cross.
+- SL/TP: fixed pip distances (inputs); lots sized to 0.25% balance risk.
+- Execution: IOC fill, slippage capped via input; dynamic spread guard uses 3-sample avg * multiplier.
+- Breakeven: at 1R, SL moves to entry +0.5 pip.
+- New-bar only: avoids multiple entries per bar.
+- Guardrails: session window plus rollover skip; trades/day cap (default 2), loss-streak pause (default 2), optional cooldown after a close.
+- Added safety: absolute max spread cap (pips) and EMA200 slope check to avoid trading in flat trend conditions.
+
+Inputs
+- Risk: `InpRiskPerTrade` (default 0.25%).
+- Trend/trigger: `InpSlowEMA=200`, `InpFastEMA=20`.
+- SL/TP: `InpStopLossPips`, `InpTakeProfitPips`.
+- Session: `InpStartHour`, `InpEndHour` (server time).
+- Execution safety: `InpMaxSlippage` (pips), `InpSpreadMult` (multiplier on 3-bar avg spread).
+- Spread hard cap: `InpMaxSpreadPips`.
+- Magic: `InpMagicNum`.
+- Guardrails: `InpRolloverHourStart/End`, `InpMaxTradesPerDay`, `InpMaxConsecLosses`, `InpCooldownMinutes`.
+
+Operational notes
+- Symbol is auto-selected on init; uses IOC filling.
+- Uses a 3-tick warm-up for spread averaging before trading.
+- New-bar guard avoids duplicate entries on the same candle.
+- Stops-level check prevents invalid SL/TP placement.
+
+Testing checklist
+- Confirm spread filter blocks trades when current spread exceeds avg*mult.
+- Check SL/TP placement respects broker stop levels.
+- Verify breakeven moves SL after 1R and does not leap over TP.
+- Run with slippage and spread spikes to ensure orders respect deviation and filter.
 BootcampSafeEA (EURUSD H1, 5ers-friendly)
 ==========================================
 
