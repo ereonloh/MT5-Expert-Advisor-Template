@@ -37,6 +37,7 @@ input double InpRiskTrimFactor    = 0.6;        // Trim risk factor
 input double InpHighVolAtrMult    = 2.5;        // High vol ATR multiplier
 input double InpHighSpreadFactor  = 0.9;        // High spread factor
 input int    InpEmaTouchPoints    = 5;          // EMA20 touch tolerance (points)
+input double InpLeverage           = 5.0;        // Position leverage (1:X)
 input int    InpMagic             = 50525;      // Magic number
 
 // ---- Internal state ----
@@ -213,25 +214,22 @@ bool SpreadOk()
    return (spread >= 0 && spread <= InpMaxSpreadPoints);
 }
 
-double CalcLotsByRisk(double sl_distance_price, double riskPercent)
+double CalcLotsByLeverageAndRisk(double sl_distance_price)
 {
    if(sl_distance_price <= 0) return 0.0;
 
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double riskMoney = balance * (riskPercent / 100.0);
-
-   double tick_value = SymbolInfoDouble(g_symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tick_size  = SymbolInfoDouble(g_symbol, SYMBOL_TRADE_TICK_SIZE);
-
-   if(tick_value <= 0 || tick_size <= 0) return 0.0;
-
-   double ticks = sl_distance_price / tick_size;
-   if(ticks <= 0) return 0.0;
-
-   double lossPerLot = ticks * tick_value;
-   if(lossPerLot <= 0) return 0.0;
-
-   double lots = riskMoney / lossPerLot;
+   // PRIMARY: Leverage-based sizing (1:X means position = X * equity)
+   double leverageLots = CalcLotsByLeverage();
+   
+   // SAFETY CAP: Risk-based maximum (prevent catastrophic loss)
+   double maxRiskLots = CalcMaxLotsByRisk(sl_distance_price, 1.0);  // Cap at 1% max risk per trade
+   
+   // Use leverage-based lots, but cap by max risk
+   double lots = MathMin(leverageLots, maxRiskLots);
+   
+   // Debug: show calculations
+   PrintFormat("LOT CALC: Leverage(1:%.0f)=%.4f | MaxRisk(1%%)=%.4f | Using=%.4f",
+               InpLeverage, leverageLots, maxRiskLots, lots);
 
    double minLot  = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MIN);
    double maxLot  = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MAX);
@@ -244,6 +242,57 @@ double CalcLotsByRisk(double sl_distance_price, double riskPercent)
 
    if(lots < minLot) lots = minLot;
 
+   return lots;
+}
+
+double CalcMaxLotsByRisk(double sl_distance_price, double maxRiskPct)
+{
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double riskMoney = balance * (maxRiskPct / 100.0);
+
+   double tick_value = SymbolInfoDouble(g_symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tick_size  = SymbolInfoDouble(g_symbol, SYMBOL_TRADE_TICK_SIZE);
+
+   if(tick_value <= 0 || tick_size <= 0) return 0.01;
+
+   double ticks = sl_distance_price / tick_size;
+   if(ticks <= 0) return 0.01;
+
+   double lossPerLot = ticks * tick_value;
+   if(lossPerLot <= 0) return 0.01;
+
+   return riskMoney / lossPerLot;
+}
+
+double CalcLotsByLeverage()
+{
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   
+   // At 1:X leverage, position value = X * equity
+   double targetNotional = equity * InpLeverage;
+   
+   // Get contract size and price to calculate notional value per lot
+   double contractSize = SymbolInfoDouble(g_symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   double price = SymbolInfoDouble(g_symbol, SYMBOL_ASK);
+   
+   if(contractSize <= 0 || price <= 0)
+      return SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MIN);
+   
+   // Notional value per 1 lot = contractSize * price
+   double notionalPer1Lot = contractSize * price;
+   
+   double lots = targetNotional / notionalPer1Lot;
+   
+   // Normalize to broker constraints
+   double lotStep = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_STEP);
+   double minLot = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MAX);
+   if(lotStep <= 0) lotStep = 0.01;
+   
+   lots = MathMin(lots, maxLot);
+   lots = MathFloor(lots / lotStep) * lotStep;
+   if(lots < minLot) lots = minLot;
+   
    return lots;
 }
 
@@ -422,10 +471,8 @@ void TryEnter()
    if(sl <= 0 || tp <= 0) return;
    if(!StopsLevelOk(entry, sl, tp)) return;
 
-   // Lot size by risk
-   double spread_pts = (double)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD);
-   double effRisk = AdjustRiskPercent(spread_pts, atr);
-   double lots = CalcLotsByRisk(MathAbs(entry - sl), effRisk);
+   // Lot size by leverage (with risk cap)
+   double lots = CalcLotsByLeverageAndRisk(MathAbs(entry - sl));
    if(lots <= 0) return;
 
    trade.SetExpertMagicNumber(InpMagic);

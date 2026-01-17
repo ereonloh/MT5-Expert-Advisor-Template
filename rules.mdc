@@ -20,5 +20,5 @@ EMA200 trend filter
 Pullback entry (price crosses EMA20 back in trend direction)
 1 position max
 Mandatory SL/TP
-Risk per trade = 0.25% default
+Position sizing = 1:5 leverage (capped at 1% max risk per trade)
 Cooldown after a trade

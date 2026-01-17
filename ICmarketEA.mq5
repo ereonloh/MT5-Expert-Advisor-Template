@@ -14,16 +14,17 @@ input int      InpSlowEMA        = 200;      // Trend EMA (Filter)
 input int      InpStopLossPips   = 15;       // Hard SL in pips (15.0 pips)
 input int      InpTakeProfitPips = 30;       // TP in pips (30.0 pips)
 input int      InpStartHour      = 8;        // Session start (server)
-input int      InpEndHour        = 20;       // Session end (server)
+input int      InpEndHour        = 22;       // Session end (server)
 input int      InpMagicNum       = 123456;   // Unique ID for Trades
 input double   InpMaxSlippage    = 3.0;      // Max slippage (pips)
 input double   InpSpreadMult     = 1.5;      // Spread must be < avg(3) * this
-input double   InpMaxSpreadPips  = 2.5;      // Absolute max spread allowed (pips)
+input double   InpMaxSpreadPips  = 3.0;      // Absolute max spread allowed (pips)
 input int      InpRolloverHourStart = 22;    // Skip trading from this hour (server)
 input int      InpRolloverHourEnd   = 23;    // Skip trading until this hour (inclusive)
 input int      InpMaxTradesPerDay   = 2;     // Max trades per day (0 = unlimited)
 input int      InpMaxConsecLosses   = 2;     // Pause after this many consecutive losses (0 = off)
 input int      InpCooldownMinutes   = 0;     // Cooldown after a close (0 = none)
+input int      InpEmaTouchPoints    = 5;     // EMA20 touch tolerance (points)
 
 CTrade         trade;
 CPositionInfo  pos;
@@ -35,6 +36,7 @@ double g_spread_hist[3] = {0,0,0};
 int    g_spread_idx = 0;
 bool   g_spread_filled = false;
 datetime g_last_close_time = 0;
+datetime g_last_trade_time = 0;
 
 // Pip & slippage utilities
 // Pip size (price units per pip) for 3/4/5-digit symbols
@@ -83,8 +85,13 @@ bool SpreadOk()
 
 bool SessionOk()
 {
-   MqlDateTime dt; TimeToStruct(TimeCurrent(), dt);
-   return (dt.hour >= InpStartHour && dt.hour < InpEndHour);
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   if(InpStartHour < 0 || InpStartHour > 23 || InpEndHour < 0 || InpEndHour > 24)
+      return false;
+   if(dt.hour < InpStartHour || dt.hour >= InpEndHour)
+      return false;
+   return true;
 }
 
 // Rollover/illiquid-hour skip
@@ -129,12 +136,40 @@ bool TrendOk(const double &emaS[])
    // emaS[0]=current, emaS[1]=prev, emaS[2]=prev2 (already copied)
    double slopeUp   = emaS[0] - emaS[2];
    double slopeDown = emaS[2] - emaS[0];
-   double minSlope = 0.5 * PipPoints(); // 0.5 pip over 2 bars
-   bool up   = (emaS[1] < emaS[0]) && (slopeUp >= minSlope);
-   bool down = (emaS[1] > emaS[0]) && (slopeDown >= minSlope);
+   double minSlope = 0.00001; // Minimal slope to avoid over-filtering
+   bool up   = (slopeUp >= minSlope);
+   bool down = (slopeDown >= minSlope);
    return (up || down);
 }
 
+int CalculateSetupQuality(bool isUptrend,
+                          bool isDowntrend,
+                          const double &emaS[],
+                          const double &close[],
+                          double spreadPips)
+{
+   int score = 1; // Base conditions already met by caller.
+   double pipPoints = PipPoints();
+   double slopePerBarPips = 0.0;
+   if(pipPoints > 0.0)
+      slopePerBarPips = (emaS[0] - emaS[1]) / pipPoints;
+
+   bool strongSlope = (isUptrend && slopePerBarPips > 0.1) ||
+                      (isDowntrend && slopePerBarPips < -0.1);
+   bool tightSpread = (spreadPips >= 0.0 && spreadPips < (InpMaxSpreadPips * 0.5));
+
+   if(strongSlope && tightSpread)
+   {
+      score = 2;
+      bool momentumUp = (close[1] > close[2] && close[2] > close[3] && close[2] > emaS[2]);
+      bool momentumDown = (close[1] < close[2] && close[2] < close[3] && close[2] < emaS[2]);
+      bool ultraTightSpread = (spreadPips >= 0.0 && spreadPips < (InpMaxSpreadPips * 0.4));
+      if(ultraTightSpread && ((isUptrend && momentumUp) || (isDowntrend && momentumDown)))
+         score = 3;
+   }
+
+   return score;
+}
 datetime DayAnchor(datetime t)
 {
    MqlDateTime dt; TimeToStruct(t, dt);
@@ -199,6 +234,32 @@ bool CooldownOk()
    return (TimeCurrent() - g_last_close_time) >= (InpCooldownMinutes * 60);
 }
 
+void UpdateLastCloseTime()
+{
+   HistorySelect(TimeCurrent() - 7*24*3600, TimeCurrent());
+
+   int deals = HistoryDealsTotal();
+   datetime last = g_last_close_time;
+
+   for(int i = deals-1; i >= 0; i--)
+   {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0) continue;
+
+      string sym = HistoryDealGetString(ticket, DEAL_SYMBOL);
+      long magic  = (long)HistoryDealGetInteger(ticket, DEAL_MAGIC);
+      long entry  = (long)HistoryDealGetInteger(ticket, DEAL_ENTRY);
+
+      if(sym == _Symbol && magic == InpMagicNum && entry == DEAL_ENTRY_OUT)
+      {
+         datetime t = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+         if(t > last) last = t;
+         break;
+      }
+   }
+   g_last_close_time = last;
+}
+
 int OnInit()
 {
    if(!SymbolSelect(_Symbol, true))
@@ -212,6 +273,17 @@ int OnInit()
 
    trade.SetExpertMagicNumber(InpMagicNum);
    trade.SetTypeFilling(ORDER_FILLING_IOC);
+
+   // Restore persisted state from GlobalVariables
+   g_last_close_time = (datetime)GVGet(GVKey("last_close_time"), 0.0);
+   g_last_trade_time = (datetime)GVGet(GVKey("last_trade_time"), 0.0);
+
+   // Pre-fill spread history to prevent blocking early trades
+   int curSpread = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   for(int i = 0; i < 3; i++)
+      g_spread_hist[i] = curSpread;
+   g_spread_filled = true;
+
    return(INIT_SUCCEEDED);
 }
 
@@ -228,34 +300,82 @@ void OnTick()
    EnsureDayContext();
    if(!TradesPerDayOk()) return;
    if(!LossStreakOk()) return;
+   UpdateLastCloseTime();
    if(!CooldownOk()) return;
    if(PositionExists()) { ManageBreakeven(); return; }
 
-   double emaF[], emaS[], close[];
+   double emaF[], emaS[], close[], high[], low[];
+   long   volume[];
    ArraySetAsSeries(emaF, true);
    ArraySetAsSeries(emaS, true);
    ArraySetAsSeries(close, true);
+   ArraySetAsSeries(high, true);
+   ArraySetAsSeries(low, true);
+   ArraySetAsSeries(volume, true);
 
    if(CopyBuffer(handleFast, 0, 0, 3, emaF) < 3) return;
    if(CopyBuffer(handleSlow, 0, 0, 3, emaS) < 3) return;
-   if(CopyClose(_Symbol, _Period, 0, 3, close) < 3) return;
-
-   if(!SpreadOk()) return;
+   if(CopyClose(_Symbol, _Period, 0, 4, close) < 4) return;
+   if(CopyHigh(_Symbol, _Period, 0, 3, high) < 3) return;
+   if(CopyLow(_Symbol, _Period, 0, 3, low) < 3) return;
+   if(CopyTickVolume(_Symbol, _Period, 0, 11, volume) < 11) return;
 
    bool isUptrend  = (close[1] > emaS[1]);
    bool isDowntrend = (close[1] < emaS[1]);
-   if(!TrendOk(emaS)) return;
 
-   bool buySignal  = isUptrend  && close[1] <= emaF[1] && close[2] > emaF[2];
-   bool sellSignal = isDowntrend && close[1] >= emaF[1] && close[2] < emaF[2];
+   double pipPoints = PipPoints();
+   double slopePerBarPips = 0.0;
+   if(pipPoints > 0.0)
+      slopePerBarPips = (emaS[0] - emaS[1]) / pipPoints;
+   
+   // Pullback signal: wick touches EMA20 within tolerance (like BootcampSafeEA)
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double emaTouchTol = (point > 0.0 && InpEmaTouchPoints > 0) ? (InpEmaTouchPoints * point) : 0.0;
 
+   double avgVol10 = 0.0;
+   for(int i = 1; i <= 10; i++)
+      avgVol10 += (double)volume[i];
+   avgVol10 /= 10.0;
+   bool volBoost = (avgVol10 > 0.0 && (double)volume[1] > avgVol10);
+
+   bool closeNear = (MathAbs(close[1] - emaF[1]) <= emaTouchTol);
+   bool wickTouchBuy = (low[1] <= emaF[1] + emaTouchTol);
+   bool wickTouchSell = (high[1] >= emaF[1] - emaTouchTol);
+
+   // Buy: uptrend + close above EMA20 + (wick touch OR close proximity with volume boost)
+   // Sell: downtrend + close below EMA20 + (wick touch OR close proximity with volume boost)
+   bool buySignal  = isUptrend && (close[1] > emaF[1]) && (wickTouchBuy || (closeNear && volBoost));
+   bool sellSignal = isDowntrend && (close[1] < emaF[1]) && (wickTouchSell || (closeNear && volBoost));
+
+   bool spreadOk = SpreadOk();
+   bool trendOk = TrendOk(emaS);
+
+   // Log potential signals for debugging
+   if(buySignal || sellSignal)
+   {
+      if(!spreadOk || !trendOk)
+      {
+         PrintFormat("SIGNAL BLOCKED | buy=%d sell=%d | SpreadOk=%d TrendOk=%d | close=%.5f emaF=%.5f emaS=%.5f",
+                     buySignal, sellSignal, spreadOk, trendOk, close[1], emaF[1], emaS[1]);
+      }
+   }
+
+   if(!spreadOk) return;
+   if(!trendOk) return;
    if(!buySignal && !sellSignal) return;
+
+   if(InpMaxTradesPerDay > 0 && MathAbs(slopePerBarPips) < 0.05)
+   {
+      int tradesToday = (int)GVGet(GVKey("day_trades"), 0.0);
+      int maxTradesWeak = MathMax(1, InpMaxTradesPerDay - 1);
+      if(tradesToday >= maxTradesWeak)
+         return;
+   }
 
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    if(ask <= 0 || bid <= 0) return;
 
-   double pipPoints = PipPoints();
    double slDist = InpStopLossPips * pipPoints;
    double tpDist = InpTakeProfitPips * pipPoints;
 
@@ -269,7 +389,13 @@ void OnTick()
 
    if(!StopsLevelOk(entry, sl, tp)) return;
 
-   double lots = CalcLotsByRisk(slDist);
+   int spreadPoints = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   double spreadPips = (spreadPoints > 0) ? (spreadPoints * _Point / pipPoints) : 0.0;
+   int qualityScore = CalculateSetupQuality(isUptrend, isDowntrend, emaS, close, spreadPips);
+
+   double lots = CalcLotsByRisk(slDist, qualityScore);
+   if(spreadPips >= (InpMaxSpreadPips * 0.9))
+      lots *= 0.8; // entry tax near max spread
    if(lots <= 0) return;
 
    trade.SetDeviationInPoints((int)SlippagePoints());
@@ -298,16 +424,27 @@ void OnTick()
       string keyTrades = GVKey("day_trades");
       double trades = GVGet(keyTrades, 0.0);
       GVSet(keyTrades, trades + 1.0);
+      g_last_trade_time = TimeCurrent();
+      GVSet(GVKey("last_trade_time"), (double)g_last_trade_time);
    }
 }
 
 // Lot size from % risk and SL distance (price units)
-double CalcLotsByRisk(double sl_distance_price)
+double CalcLotsByRisk(double sl_distance_price, int qualityScore)
 {
    if(sl_distance_price <= 0) return 0.0;
 
+   double riskPercent = InpRiskPerTrade;
+   if(qualityScore == 2)
+      riskPercent = InpRiskPerTrade * 1.5;
+   else if(qualityScore >= 3)
+      riskPercent = InpRiskPerTrade * 2.0;
+
+   if(riskPercent > 1.0)
+      riskPercent = 1.0; // hard cap at 1% per trade
+
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double riskMoney = balance * (InpRiskPerTrade / 100.0);
+   double riskMoney = balance * (riskPercent / 100.0);
 
    double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
@@ -373,6 +510,9 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
    datetime t = (datetime)HistoryDealGetInteger(deal, DEAL_TIME);
    if(t > g_last_close_time)
       g_last_close_time = t;
+   g_last_trade_time = t;
+   GVSet(GVKey("last_close_time"), (double)g_last_close_time);
+   GVSet(GVKey("last_trade_time"), (double)g_last_trade_time);
 }
 
 // Break-even manager: move SL to entry + 0.5 pip when 1R is reached
