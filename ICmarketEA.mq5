@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                              PropPullback_v2.mq5 |
-//|   IC Markets Raw Spread optimized (EMA200/20, 0.25% risk, H1)    |
+//|   IC Markets Raw Spread optimized (EMA200/20, controlled leverage) |
 //+------------------------------------------------------------------+
 #property strict
 
@@ -8,7 +8,7 @@
 #include <Trade/PositionInfo.mqh>
 
 //--- Inputs
-input double   InpRiskPerTrade   = 0.25;     // Risk per Trade (%)
+input double   InpRiskPerTrade   = 0.25;     // Base risk per trade (%)
 input int      InpFastEMA        = 20;       // Entry EMA (Signal)
 input int      InpSlowEMA        = 200;      // Trend EMA (Filter)
 input int      InpStopLossPips   = 15;       // Hard SL in pips (15.0 pips)
@@ -19,6 +19,8 @@ input int      InpMagicNum       = 123456;   // Unique ID for Trades
 input double   InpMaxSlippage    = 3.0;      // Max slippage (pips)
 input double   InpSpreadMult     = 1.5;      // Spread must be < avg(3) * this
 input double   InpMaxSpreadPips  = 3.0;      // Absolute max spread allowed (pips)
+input double   InpLeverage       = 3.0;      // Base leverage (1:X), 0 = disable
+input double   InpMaxDailyLossPct = 2.0;     // Max daily equity loss cap (%)
 input int      InpRolloverHourStart = 22;    // Skip trading from this hour (server)
 input int      InpRolloverHourEnd   = 23;    // Skip trading until this hour (inclusive)
 input int      InpMaxTradesPerDay   = 2;     // Max trades per day (0 = unlimited)
@@ -35,6 +37,8 @@ int handleFast, handleSlow;
 double g_spread_hist[3] = {0,0,0};
 int    g_spread_idx = 0;
 bool   g_spread_filled = false;
+datetime g_day_anchor = 0;
+double   g_day_equity_start = 0.0;
 datetime g_last_close_time = 0;
 datetime g_last_trade_time = 0;
 
@@ -133,13 +137,12 @@ bool PositionExists()
 // Require EMA200 to have a modest slope to confirm trend (avoid flat filters)
 bool TrendOk(const double &emaS[])
 {
-   // emaS[0]=current, emaS[1]=prev, emaS[2]=prev2 (already copied)
-   double slopeUp   = emaS[0] - emaS[2];
-   double slopeDown = emaS[2] - emaS[0];
-   double minSlope = 0.00001; // Minimal slope to avoid over-filtering
-   bool up   = (slopeUp >= minSlope);
-   bool down = (slopeDown >= minSlope);
-   return (up || down);
+   // emaS[0]=current, emaS[1]=prev (already copied)
+   double pipPoints = PipPoints();
+   if(pipPoints <= 0.0) return false;
+
+   double slopePips = MathAbs((emaS[0] - emaS[1]) / pipPoints);
+   return (slopePips >= 0.05);
 }
 
 int CalculateSetupQuality(bool isUptrend,
@@ -156,15 +159,13 @@ int CalculateSetupQuality(bool isUptrend,
 
    bool strongSlope = (isUptrend && slopePerBarPips > 0.1) ||
                       (isDowntrend && slopePerBarPips < -0.1);
-   bool tightSpread = (spreadPips >= 0.0 && spreadPips < (InpMaxSpreadPips * 0.5));
 
-   if(strongSlope && tightSpread)
+   if(strongSlope)
    {
       score = 2;
       bool momentumUp = (close[1] > close[2] && close[2] > close[3] && close[2] > emaS[2]);
       bool momentumDown = (close[1] < close[2] && close[2] < close[3] && close[2] < emaS[2]);
-      bool ultraTightSpread = (spreadPips >= 0.0 && spreadPips < (InpMaxSpreadPips * 0.4));
-      if(ultraTightSpread && ((isUptrend && momentumUp) || (isDowntrend && momentumDown)))
+      if((isUptrend && momentumUp) || (isDowntrend && momentumDown))
          score = 3;
    }
 
@@ -202,15 +203,21 @@ void EnsureDayContext()
 {
    datetime today = DayAnchor(TimeCurrent());
    string keyDay = GVKey("last_day");
+   string keyEquity = GVKey("day_equity_start");
    string keyTrades = GVKey("day_trades");
    string keyLosses = GVKey("consec_losses");
    datetime storedDay = (datetime)GVGet(keyDay, 0.0);
    if(storedDay != today)
    {
       GVSet(keyDay, (double)today);
+      g_day_equity_start = AccountInfoDouble(ACCOUNT_EQUITY);
+      GVSet(keyEquity, g_day_equity_start);
       GVSet(keyTrades, 0.0);
       GVSet(keyLosses, 0.0);
    }
+   if(g_day_equity_start <= 0.0)
+      g_day_equity_start = GVGet(keyEquity, AccountInfoDouble(ACCOUNT_EQUITY));
+   g_day_anchor = today;
 }
 
 bool TradesPerDayOk()
@@ -232,6 +239,15 @@ bool CooldownOk()
    if(InpCooldownMinutes <= 0) return true;
    if(g_last_close_time == 0) return true;
    return (TimeCurrent() - g_last_close_time) >= (InpCooldownMinutes * 60);
+}
+
+bool DailyLossOk()
+{
+   if(InpMaxDailyLossPct <= 0.0) return true;
+   if(g_day_equity_start <= 0.0) return true;
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   double floor = g_day_equity_start * (1.0 - InpMaxDailyLossPct / 100.0);
+   return (eq > floor);
 }
 
 void UpdateLastCloseTime()
@@ -275,6 +291,8 @@ int OnInit()
    trade.SetTypeFilling(ORDER_FILLING_IOC);
 
    // Restore persisted state from GlobalVariables
+   g_day_anchor = (datetime)GVGet(GVKey("last_day"), (double)DayAnchor(TimeCurrent()));
+   g_day_equity_start = GVGet(GVKey("day_equity_start"), AccountInfoDouble(ACCOUNT_EQUITY));
    g_last_close_time = (datetime)GVGet(GVKey("last_close_time"), 0.0);
    g_last_trade_time = (datetime)GVGet(GVKey("last_trade_time"), 0.0);
 
@@ -300,6 +318,7 @@ void OnTick()
    EnsureDayContext();
    if(!TradesPerDayOk()) return;
    if(!LossStreakOk()) return;
+   if(!DailyLossOk()) return;
    UpdateLastCloseTime();
    if(!CooldownOk()) return;
    if(PositionExists()) { ManageBreakeven(); return; }
@@ -324,10 +343,7 @@ void OnTick()
    bool isDowntrend = (close[1] < emaS[1]);
 
    double pipPoints = PipPoints();
-   double slopePerBarPips = 0.0;
-   if(pipPoints > 0.0)
-      slopePerBarPips = (emaS[0] - emaS[1]) / pipPoints;
-   
+
    // Pullback signal: wick touches EMA20 within tolerance (like BootcampSafeEA)
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double emaTouchTol = (point > 0.0 && InpEmaTouchPoints > 0) ? (InpEmaTouchPoints * point) : 0.0;
@@ -364,14 +380,6 @@ void OnTick()
    if(!trendOk) return;
    if(!buySignal && !sellSignal) return;
 
-   if(InpMaxTradesPerDay > 0 && MathAbs(slopePerBarPips) < 0.05)
-   {
-      int tradesToday = (int)GVGet(GVKey("day_trades"), 0.0);
-      int maxTradesWeak = MathMax(1, InpMaxTradesPerDay - 1);
-      if(tradesToday >= maxTradesWeak)
-         return;
-   }
-
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    if(ask <= 0 || bid <= 0) return;
@@ -393,7 +401,17 @@ void OnTick()
    double spreadPips = (spreadPoints > 0) ? (spreadPoints * _Point / pipPoints) : 0.0;
    int qualityScore = CalculateSetupQuality(isUptrend, isDowntrend, emaS, close, spreadPips);
 
-   double lots = CalcLotsByRisk(slDist, qualityScore);
+   if(InpMaxTradesPerDay > 0 && qualityScore == 1)
+   {
+      int tradesToday = (int)GVGet(GVKey("day_trades"), 0.0);
+      int maxTradesWeak = 1;
+      if(tradesToday >= maxTradesWeak)
+         return;
+   }
+
+   double lots = (InpLeverage > 0.0)
+                 ? CalcLotsByControlledLeverage(slDist, qualityScore)
+                 : CalcLotsByRisk(slDist, qualityScore);
    if(spreadPips >= (InpMaxSpreadPips * 0.9))
       lots *= 0.8; // entry tax near max spread
    if(lots <= 0) return;
@@ -458,6 +476,81 @@ double CalcLotsByRisk(double sl_distance_price, int qualityScore)
    if(lossPerLot <= 0) return 0.0;
 
    double lots = riskMoney / lossPerLot;
+
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(lotStep <= 0) lotStep = 0.01;
+
+   lots = MathMax(minLot, MathMin(maxLot, lots));
+   lots = MathFloor(lots / lotStep) * lotStep;
+   if(lots < minLot) lots = minLot;
+
+   return lots;
+}
+
+double CalcMaxLotsByRisk(double sl_distance_price, double maxRiskPct)
+{
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double riskMoney = balance * (maxRiskPct / 100.0);
+
+   double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+
+   if(tick_value <= 0 || tick_size <= 0) return 0.0;
+
+   double ticks = sl_distance_price / tick_size;
+   if(ticks <= 0) return 0.0;
+
+   double lossPerLot = ticks * tick_value;
+   if(lossPerLot <= 0) return 0.0;
+
+   return riskMoney / lossPerLot;
+}
+
+double CalcLotsByLeverage()
+{
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double targetNotional = equity * InpLeverage;
+
+   double contractSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   if(contractSize <= 0 || price <= 0)
+      return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+
+   double notionalPer1Lot = contractSize * price;
+   if(notionalPer1Lot <= 0) return 0.0;
+
+   double lots = targetNotional / notionalPer1Lot;
+
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   if(lotStep <= 0) lotStep = 0.01;
+
+   lots = MathMin(lots, maxLot);
+   lots = MathFloor(lots / lotStep) * lotStep;
+   if(lots < minLot) lots = minLot;
+
+   return lots;
+}
+
+double CalcLotsByControlledLeverage(double sl_distance_price, int qualityScore)
+{
+   if(sl_distance_price <= 0) return 0.0;
+
+   double qualityMult = 1.0;
+   if(qualityScore == 2)
+      qualityMult = 1.5;
+   else if(qualityScore >= 3)
+      qualityMult = 2.0;
+
+   double leverageLots = CalcLotsByLeverage();
+   double scaledLots = leverageLots * qualityMult;
+
+   double maxRiskLots = CalcMaxLotsByRisk(sl_distance_price, 1.0); // hard cap at 1%
+   double lots = MathMin(scaledLots, maxRiskLots);
 
    double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);

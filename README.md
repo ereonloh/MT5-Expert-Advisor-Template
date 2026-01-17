@@ -3,15 +3,15 @@ ICmarketEA (PropPullback_v2 for IC Markets Raw)
 
 Overview
 --------
-PropPullback_v2 is an H1 EMA200/EMA20 pullback EA tuned for IC Markets Raw. It keeps risk small (0.25%/trade), uses IOC market execution, slippage limits, a dynamic spread filter, and a simple breakeven step. One position max per symbol/magic; no martingale/grid/arb; visible SL/TP.
+PropPullback_v2 is an H1 EMA200/EMA20 pullback EA tuned for IC Markets Raw. It keeps risk small (base 0.25%/trade), uses controlled leverage with a 1% risk cap, IOC market execution, slippage limits, a dynamic spread filter, and a simple breakeven step. One position max per symbol/magic; no martingale/grid/arb; visible SL/TP.
 
 Key logic
 - Trend + trigger: EMA200 filter, EMA20 pullback cross.
-- SL/TP: fixed pip distances (inputs, now 15/30 pips by default); lots sized to 0.25% balance risk. Uses correct pip sizing for 3/4/5-digit symbols.
+- SL/TP: fixed pip distances (inputs, now 15/30 pips by default); lots sized by controlled leverage and quality scoring, capped at 1% risk. Uses correct pip sizing for 3/4/5-digit symbols.
 - Execution: IOC fill, slippage capped via input; dynamic spread guard uses 3-sample avg * multiplier.
 - Breakeven: at 1R, SL moves to entry +0.5 pip.
 - New-bar only: avoids multiple entries per bar.
-- Guardrails: session window plus rollover skip; trades/day cap (default 2), loss-streak pause (default 2), optional cooldown after a close.
+- Guardrails: session window plus rollover skip; trades/day cap (default 2), loss-streak pause (default 2), cooldown after a close, daily loss cap (2%).
 - Added safety: absolute max spread cap (pips) and EMA200 slope check to avoid trading in flat trend conditions.
 
 Inputs
@@ -21,6 +21,8 @@ Inputs
 - Session: `InpStartHour`, `InpEndHour` (server time).
 - Execution safety: `InpMaxSlippage` (pips), `InpSpreadMult` (multiplier on 3-bar avg spread).
 - Spread hard cap: `InpMaxSpreadPips`.
+- Leverage: `InpLeverage` (base 1:X, 0 disables leverage mode).
+- Daily loss cap: `InpMaxDailyLossPct`.
 - Magic: `InpMagicNum`.
 - Guardrails: `InpRolloverHourStart/End`, `InpMaxTradesPerDay`, `InpMaxConsecLosses`, `InpCooldownMinutes`.
 
@@ -33,6 +35,7 @@ Operational notes
 Testing checklist
 - Confirm spread filter blocks trades when current spread exceeds avg*mult.
 - Check SL/TP placement respects broker stop levels.
+- Verify daily loss cap blocks new entries after drawdown reaches 2%.
 - Verify breakeven moves SL after 1R and does not leap over TP.
 - Run with slippage and spread spikes to ensure orders respect deviation and filter.
 BootcampSafeEA (EURUSD H1, 5ers-friendly)
