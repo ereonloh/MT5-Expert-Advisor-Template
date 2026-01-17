@@ -20,7 +20,7 @@ input int    InpEMAPullbackPeriod = 20;         // Pullback EMA
 input int    InpATRPeriod         = 14;         // ATR for SL distance
 input double InpSL_ATR_Mult       = 2.0;        // SL = ATR * multiplier
 input double InpTP_RR             = 2.0;        // TP = RR * SL
-input int    InpCooldownMinutes   = 360;        // Wait after closing a trade
+input int    InpCooldownMinutes   = 240;        // Wait after closing a trade
 input int    InpMaxSpreadPoints   = 25;         // Max spread (points) to allow entry
 input int    InpStartHour         = 8;          // Session start hour (server time)
 input int    InpEndHour           = 20;         // Session end hour (server time)
