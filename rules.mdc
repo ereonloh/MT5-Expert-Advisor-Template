@@ -24,3 +24,9 @@ Position sizing = 1:X leverage (capped at 1% max risk per trade)
 Cooldown after a trade
 Max daily loss cap: 2% (equity-based)
 
+Multi-month tuning (opt-in, stays within prop rules):
+- Expand session window to capture more trades (e.g., 6–22 server time)
+- Reduce cooldown to 60–120 minutes
+- Increase max trades per day to 3–5
+- Lower min ATR floor slightly (e.g., 5.0 pips) or enable inactivity relax
+- Allow larger max drawdown guard for longer runs (e.g., 8–12%)
