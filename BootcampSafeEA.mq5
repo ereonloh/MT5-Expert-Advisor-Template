@@ -17,13 +17,13 @@ input ENUM_TIMEFRAMES InpTF       = PERIOD_H1;  // Legacy entry timeframe (unuse
 input ENUM_TIMEFRAMES InpEntryTF  = PERIOD_H1;  // Entry timeframe
 input ENUM_TIMEFRAMES InpBiasTF   = PERIOD_H4;  // Bias timeframe
 input double InpRiskPercent       = 1.0;        // Risk per trade (% of balance)
-input int    InpKeltnerPeriod     = 20;         // Keltner Channel Period
-input double InpKeltnerMult       = 1.6;        // Keltner Channel Multiplier
+input int    InpKeltnerPeriod     = 12;         // Keltner Channel Period
+input double InpKeltnerMult       = 1.5;        // Keltner Channel Multiplier
 input int    InpDailyEmaPeriod    = 200;        // D1 trend filter EMA
 input int    InpATRPeriod         = 14;         // ATR for SL distance
-input double InpSL_ATR_Mult       = 2.5;        // SL = ATR * multiplier
-input double InpTP_RR             = 0.0;        // TP = RR * SL (0.0 = Infinite)
-input double InpTrailingAtrMult   = 4.0;        // Trailing stop ATR multiplier
+input double InpSL_ATR_Mult       = 1.8;        // SL = ATR * multiplier
+input double InpTP_RR             = 2.0;        // TP = RR * SL (0.0 = Infinite)
+input double InpTrailingAtrMult   = 1.5;        // Trailing stop ATR multiplier
 input double InpBreakevenTrigger_ATR = 1.0;     // Breakeven trigger (ATR mult)
 input double InpBreakevenLock_ATR    = 0.1;     // Breakeven lock (ATR mult)
 input int    InpCooldownMinutes   = 60;         // Wait after closing a trade
