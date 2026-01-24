@@ -12,23 +12,23 @@ CTrade trade;
 CPositionInfo pos;
 
 // ---- Inputs ----
-input string InpSymbol            = "EURUSD";   // Trade symbol
+// input string InpSymbol            = "EURUSD";   // Trade symbol (removed)
 input ENUM_TIMEFRAMES InpTF       = PERIOD_H1;  // Legacy entry timeframe (unused)
 input ENUM_TIMEFRAMES InpEntryTF  = PERIOD_H1;  // Entry timeframe
 input ENUM_TIMEFRAMES InpBiasTF   = PERIOD_H4;  // Bias timeframe
-input double InpRiskPercent       = 0.25;       // Risk per trade (% of balance)
-input int    InpEMATrendPeriod    = 200;        // Entry trend filter EMA
-input int    InpEmaFastPeriod     = 10;         // Pullback zone fast EMA
-input int    InpEmaSlowPeriod     = 30;         // Pullback zone slow EMA
-input int    InpDailyEmaPeriod    = 50;         // D1 trend filter EMA
-input int    InpBiasEmaPeriod     = 50;         // Bias EMA period (Bias TF)
+input double InpRiskPercent       = 1.0;        // Risk per trade (% of balance)
+input int    InpKeltnerPeriod     = 20;         // Keltner Channel Period
+input double InpKeltnerMult       = 1.6;        // Keltner Channel Multiplier
+input int    InpDailyEmaPeriod    = 200;        // D1 trend filter EMA
 input int    InpATRPeriod         = 14;         // ATR for SL distance
-input double InpSL_ATR_Mult       = 2.0;        // SL = ATR * multiplier
-input double InpTP_RR             = 2.0;        // TP = RR * SL
-input double InpTrailingAtrMult   = 1.5;        // Trailing stop ATR multiplier
+input double InpSL_ATR_Mult       = 2.5;        // SL = ATR * multiplier
+input double InpTP_RR             = 0.0;        // TP = RR * SL (0.0 = Infinite)
+input double InpTrailingAtrMult   = 4.0;        // Trailing stop ATR multiplier
+input double InpBreakevenTrigger_ATR = 1.0;     // Breakeven trigger (ATR mult)
+input double InpBreakevenLock_ATR    = 0.1;     // Breakeven lock (ATR mult)
 input int    InpCooldownMinutes   = 60;         // Wait after closing a trade
-input int    InpMaxSpreadPoints   = 60;         // Max spread (points)
-input int    InpStartHour         = 7;          // Session start hour
+input int    InpMaxSpreadPoints   = 250;        // Max spread (points)
+input int    InpStartHour         = 10;         // Session start hour
 input int    InpEndHour           = 21;         // Session end hour
 input int    InpSessionCloseBufferMinutes = 30; // Close positions before session end
 input int    InpRolloverHourStart = 21;         // Skip trading from this hour
@@ -46,10 +46,8 @@ input double InpHighVolPauseFactor = 2.0;       // Pause if ATR > avg * factor
 input double InpHighVolAtrMult    = 3.5;        // High vol ATR multiplier
 input double InpHighSpreadFactor  = 0.9;        // High spread factor
 input int    InpEmaTouchPoints    = 5;          // Legacy EMA touch tolerance
-input bool   InpUseDailyTrendFilter = false;     // Use D1 EMA trend filter
-input bool   InpUseCandleConfirm    = false;     // Require candle confirmation
+input bool   InpUseDailyTrendFilter = true;      // Use D1 EMA trend filter
 input bool   InpUseHighVolPause     = false;     // Pause trading on high vol
-input bool   InpUseBiasFilter       = true;      // Use Bias TF EMA filter
 input bool   InpCloseOnFriday       = true;      // Close positions before weekend
 input int    InpFridayCloseHour     = 23;        // Friday market close hour
 input int    InpFridayCloseBufferMinutes = 60;   // Minutes before close to exit
@@ -57,7 +55,7 @@ input double InpLeverage           = 5.0;        // Position leverage (1:X)
 input int    InpMagic             = 50525;      // Magic number
 
 // ---- Internal state ----
-string   g_symbol = "";
+// string   _Symbol = ""; // Removed, using _Symbol
 datetime g_last_bar_time = 0;
 datetime g_last_close_time = 0;
 datetime g_last_trade_time = 0;
@@ -66,36 +64,14 @@ double   g_day_equity_start = 0.0;
 int      g_day_trades = 0;
 double   g_equity_high = 0.0;
 int      g_consec_losses = 0;
-int      g_handleEmaTrend = INVALID_HANDLE;
-int      g_handleEmaFast  = INVALID_HANDLE;
-int      g_handleEmaSlow  = INVALID_HANDLE;
-int      g_handleEmaDaily = INVALID_HANDLE;
-int      g_handleEmaBias  = INVALID_HANDLE;
+int      g_handleKeltnerMA  = INVALID_HANDLE;
+int      g_handleKeltnerATR = INVALID_HANDLE;
+int      g_handleDailyEMA   = INVALID_HANDLE;
 
 //+------------------------------------------------------------------+
 //| Helpers                                                          |
 //+------------------------------------------------------------------+
-string ResolveSymbol()
-{
-   if(InpSymbol == "")
-      return _Symbol;
-   if(SymbolSelect(InpSymbol, true))
-      return InpSymbol;
-   if(StringFind(_Symbol, InpSymbol) == 0)
-      return _Symbol;
-
-   int total = SymbolsTotal(false);
-   for(int i = 0; i < total; i++)
-   {
-      string name = SymbolName(i, false);
-      if(StringFind(name, InpSymbol) == 0)
-      {
-         SymbolSelect(name, true);
-         return name;
-      }
-   }
-   return InpSymbol;
-}
+// string ResolveSymbol() { ... } // Removed
 
 string GvKey(const string suffix)
 {
@@ -117,7 +93,7 @@ void GvSet(const string key, double value)
 
 bool IsNewBar()
 {
-   datetime t = iTime(g_symbol, InpEntryTF, 0);
+   datetime t = iTime(_Symbol, InpEntryTF, 0);
    if(t == 0) return false;
    if(t != g_last_bar_time)
    {
@@ -135,7 +111,7 @@ bool HasOpenPosition()
       {
          string sym  = pos.Symbol();
          long   magic = pos.Magic();
-         if(sym == g_symbol && magic == InpMagic)
+         if(sym == _Symbol && magic == InpMagic)
             return true;
       }
    }
@@ -144,7 +120,7 @@ bool HasOpenPosition()
 
 double GetATR(int period)
 {
-   int handle = iATR(g_symbol, InpEntryTF, period);
+   int handle = iATR(_Symbol, InpEntryTF, period);
    if(handle == INVALID_HANDLE) return 0.0;
 
    double buf[];
@@ -171,7 +147,7 @@ double GetEMAHandle(int handle, int shift)
 
 double GetATRValue(ENUM_TIMEFRAMES tf, int period, int shift)
 {
-   int handle = iATR(g_symbol, tf, period);
+   int handle = iATR(_Symbol, tf, period);
    if(handle == INVALID_HANDLE) return 0.0;
 
    double buf[];
@@ -188,7 +164,7 @@ double GetATRValue(ENUM_TIMEFRAMES tf, int period, int shift)
 double GetATRAverage(ENUM_TIMEFRAMES tf, int period, int start_shift, int bars)
 {
    if(bars <= 0) return 0.0;
-   int handle = iATR(g_symbol, tf, period);
+   int handle = iATR(_Symbol, tf, period);
    if(handle == INVALID_HANDLE) return 0.0;
 
    double buf[];
@@ -266,8 +242,10 @@ bool RolloverOk()
 
 bool SpreadOk()
 {
-   int spread = (int)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD);
-   return (spread >= 0 && spread <= InpMaxSpreadPoints);
+   int spread = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
+   int maxSpread = InpMaxSpreadPoints;
+   if(_Digits == 3) maxSpread *= 10; // JPY protection
+   return (spread >= 0 && spread <= maxSpread);
 }
 
 double CalcLotsByLeverageAndRisk(double sl_distance_price, double maxRiskPct)
@@ -285,9 +263,9 @@ double CalcLotsByLeverageAndRisk(double sl_distance_price, double maxRiskPct)
    PrintFormat("LOT CALC: MaxRisk(%.2f%%)=%.4f | Using=%.4f",
                cappedRiskPct, maxRiskLots, lots);
 
-   double minLot  = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MIN);
-   double maxLot  = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MAX);
-   double lotStep = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_STEP);
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
    if(lotStep <= 0) lotStep = 0.01;
 
@@ -304,8 +282,8 @@ double CalcMaxLotsByRisk(double sl_distance_price, double maxRiskPct)
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double riskMoney = balance * (maxRiskPct / 100.0);
 
-   double tick_value = SymbolInfoDouble(g_symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tick_size  = SymbolInfoDouble(g_symbol, SYMBOL_TRADE_TICK_SIZE);
+   double tick_value = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tick_size  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
 
    if(tick_value <= 0 || tick_size <= 0) return 0.01;
 
@@ -326,11 +304,11 @@ double CalcLotsByLeverage()
    double targetNotional = equity * InpLeverage;
    
    // Get contract size and price to calculate notional value per lot
-   double contractSize = SymbolInfoDouble(g_symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-   double price = SymbolInfoDouble(g_symbol, SYMBOL_ASK);
+   double contractSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    
    if(contractSize <= 0 || price <= 0)
-      return SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MIN);
+      return SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    
    // Notional value per 1 lot = contractSize * price
    double notionalPer1Lot = contractSize * price;
@@ -338,9 +316,9 @@ double CalcLotsByLeverage()
    double lots = targetNotional / notionalPer1Lot;
    
    // Normalize to broker constraints
-   double lotStep = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_STEP);
-   double minLot = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MIN);
-   double maxLot = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    if(lotStep <= 0) lotStep = 0.01;
    
    lots = MathMin(lots, maxLot);
@@ -402,7 +380,7 @@ void UpdateLastCloseTime()
       long magic  = (long)HistoryDealGetInteger(ticket, DEAL_MAGIC);
       long entry  = (long)HistoryDealGetInteger(ticket, DEAL_ENTRY);
 
-      if(sym == g_symbol && magic == InpMagic && entry == DEAL_ENTRY_OUT)
+      if(sym == _Symbol && magic == InpMagic && entry == DEAL_ENTRY_OUT)
       {
          datetime t = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
          if(t > last) last = t;
@@ -414,8 +392,8 @@ void UpdateLastCloseTime()
 
 bool StopsLevelOk(double entry, double sl, double tp)
 {
-   int stops_level_points = (int)SymbolInfoInteger(g_symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
+   int stops_level_points = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double min_dist = stops_level_points * point;
    if(min_dist <= 0) return true;
 
@@ -426,7 +404,7 @@ bool StopsLevelOk(double entry, double sl, double tp)
 
 bool VolatilityOk(double atr_points)
 {
-   double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    if(point <= 0) return false;
    double pip = point * 10.0;
    if(pip <= 0) return false;
@@ -449,30 +427,30 @@ bool HighVolatilityPause()
 
 bool IsBullishEngulfing(int shift)
 {
-   double open1 = iOpen(g_symbol, InpEntryTF, shift);
-   double close1 = iClose(g_symbol, InpEntryTF, shift);
-   double open2 = iOpen(g_symbol, InpEntryTF, shift + 1);
-   double close2 = iClose(g_symbol, InpEntryTF, shift + 1);
+   double open1 = iOpen(_Symbol, InpEntryTF, shift);
+   double close1 = iClose(_Symbol, InpEntryTF, shift);
+   double open2 = iOpen(_Symbol, InpEntryTF, shift + 1);
+   double close2 = iClose(_Symbol, InpEntryTF, shift + 1);
    if(open1 == 0 || close1 == 0 || open2 == 0 || close2 == 0) return false;
    return (close1 > open1 && open2 > close2 && open1 <= close2 && close1 >= open2);
 }
 
 bool IsBearishEngulfing(int shift)
 {
-   double open1 = iOpen(g_symbol, InpEntryTF, shift);
-   double close1 = iClose(g_symbol, InpEntryTF, shift);
-   double open2 = iOpen(g_symbol, InpEntryTF, shift + 1);
-   double close2 = iClose(g_symbol, InpEntryTF, shift + 1);
+   double open1 = iOpen(_Symbol, InpEntryTF, shift);
+   double close1 = iClose(_Symbol, InpEntryTF, shift);
+   double open2 = iOpen(_Symbol, InpEntryTF, shift + 1);
+   double close2 = iClose(_Symbol, InpEntryTF, shift + 1);
    if(open1 == 0 || close1 == 0 || open2 == 0 || close2 == 0) return false;
    return (close1 < open1 && open2 < close2 && open1 >= close2 && close1 <= open2);
 }
 
 bool IsBullishPinBar(int shift)
 {
-   double open1 = iOpen(g_symbol, InpEntryTF, shift);
-   double close1 = iClose(g_symbol, InpEntryTF, shift);
-   double high1 = iHigh(g_symbol, InpEntryTF, shift);
-   double low1 = iLow(g_symbol, InpEntryTF, shift);
+   double open1 = iOpen(_Symbol, InpEntryTF, shift);
+   double close1 = iClose(_Symbol, InpEntryTF, shift);
+   double high1 = iHigh(_Symbol, InpEntryTF, shift);
+   double low1 = iLow(_Symbol, InpEntryTF, shift);
    if(open1 == 0 || close1 == 0 || high1 == 0 || low1 == 0) return false;
    double body = MathAbs(close1 - open1);
    double upper = high1 - MathMax(open1, close1);
@@ -483,10 +461,10 @@ bool IsBullishPinBar(int shift)
 
 bool IsBearishPinBar(int shift)
 {
-   double open1 = iOpen(g_symbol, InpEntryTF, shift);
-   double close1 = iClose(g_symbol, InpEntryTF, shift);
-   double high1 = iHigh(g_symbol, InpEntryTF, shift);
-   double low1 = iLow(g_symbol, InpEntryTF, shift);
+   double open1 = iOpen(_Symbol, InpEntryTF, shift);
+   double close1 = iClose(_Symbol, InpEntryTF, shift);
+   double high1 = iHigh(_Symbol, InpEntryTF, shift);
+   double low1 = iLow(_Symbol, InpEntryTF, shift);
    if(open1 == 0 || close1 == 0 || high1 == 0 || low1 == 0) return false;
    double body = MathAbs(close1 - open1);
    double upper = high1 - MathMax(open1, close1);
@@ -507,7 +485,7 @@ bool BearishConfirm(int shift)
 
 double AdjustRiskPercent(double spread_points, double atr_points)
 {
-   double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    if(point <= 0) return InpRiskPercent;
 
    double pip = point * 10.0;
@@ -563,7 +541,7 @@ void ClosePositionsBeforeSessionEnd()
    {
       if(!pos.SelectByIndex(i))
          continue;
-      if(pos.Symbol() != g_symbol || pos.Magic() != InpMagic)
+      if(pos.Symbol() != _Symbol || pos.Magic() != InpMagic)
          continue;
       trade.PositionClose(pos.Ticket());
    }
@@ -576,7 +554,7 @@ void ClosePositionsBeforeFridayClose()
    {
       if(!pos.SelectByIndex(i))
          continue;
-      if(pos.Symbol() != g_symbol || pos.Magic() != InpMagic)
+      if(pos.Symbol() != _Symbol || pos.Magic() != InpMagic)
          continue;
       trade.PositionClose(pos.Ticket());
    }
@@ -588,19 +566,19 @@ void ApplyTrailingStops()
    double atr = GetATR(InpATRPeriod);
    if(atr <= 0.0) return;
 
-   double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
-   int digits = (int)SymbolInfoInteger(g_symbol, SYMBOL_DIGITS);
-   int stops_level_points = (int)SymbolInfoInteger(g_symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   int stops_level_points = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
    double min_dist = stops_level_points * point;
 
-   double bid = SymbolInfoDouble(g_symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(g_symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       if(!pos.SelectByIndex(i))
          continue;
-      if(pos.Symbol() != g_symbol || pos.Magic() != InpMagic)
+      if(pos.Symbol() != _Symbol || pos.Magic() != InpMagic)
          continue;
 
       double entry = pos.PriceOpen();
@@ -643,10 +621,56 @@ void ApplyTrailingStops()
    }
 }
 
+void ApplyBreakeven()
+{
+   if(InpBreakevenTrigger_ATR <= 0.0) return;
+   double atr = GetATR(InpATRPeriod);
+   if(atr <= 0.0) return;
+
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(!pos.SelectByIndex(i)) continue;
+      if(pos.Symbol() != _Symbol || pos.Magic() != InpMagic) continue;
+
+      double entry = pos.PriceOpen();
+      double sl = pos.StopLoss();
+      double currentPrice = (pos.PositionType() == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_BID) : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+      double triggerDist = atr * InpBreakevenTrigger_ATR;
+      double lockDist = atr * InpBreakevenLock_ATR;
+
+      if(pos.PositionType() == POSITION_TYPE_BUY)
+      {
+         if(currentPrice - entry > triggerDist)
+         {
+            double newSL = NormalizeDouble(entry + lockDist, digits);
+            if(sl < newSL || sl == 0)
+            {
+               trade.PositionModify(pos.Ticket(), newSL, pos.TakeProfit());
+            }
+         }
+      }
+      else if(pos.PositionType() == POSITION_TYPE_SELL)
+      {
+         if(entry - currentPrice > triggerDist)
+         {
+            double newSL = NormalizeDouble(entry - lockDist, digits);
+            if(sl > newSL || sl == 0)
+            {
+               trade.PositionModify(pos.Ticket(), newSL, pos.TakeProfit());
+            }
+         }
+      }
+   }
+}
+
 void ManageOpenPositions()
 {
    ClosePositionsBeforeFridayClose();
    ClosePositionsBeforeSessionEnd();
+   ApplyBreakeven();
    ApplyTrailingStops();
 }
 
@@ -656,7 +680,7 @@ void ManageOpenPositions()
 void TryEnter()
 {
    if(_Period != InpEntryTF) return;
-   if(_Symbol != g_symbol) return;
+   // if(_Symbol != _Symbol) return; // Removed redundant check
    if(!SpreadOk()) return;
    if(!SessionOk()) return;
    if(!RolloverOk()) return;
@@ -668,49 +692,37 @@ void TryEnter()
    if(!CooldownOk()) return;
 
    // Indicators
-   double emaTrend1 = GetEMAHandle(g_handleEmaTrend, 1);
-   double emaFast1  = GetEMAHandle(g_handleEmaFast, 1);
-   double emaSlow1  = GetEMAHandle(g_handleEmaSlow, 1);
-   double emaDaily1 = GetEMAHandle(g_handleEmaDaily, 1);
-   double emaBias1  = GetEMAHandle(g_handleEmaBias, 1);
+   double emaKeltner1 = GetEMAHandle(g_handleKeltnerMA, 1);
+   double atrKeltner1 = GetEMAHandle(g_handleKeltnerATR, 1); // Using GetEMAHandle for generic buffer fetch
+   double emaKeltner2 = GetEMAHandle(g_handleKeltnerMA, 2);
+   double atrKeltner2 = GetEMAHandle(g_handleKeltnerATR, 2);
+   double emaDaily1   = GetEMAHandle(g_handleDailyEMA, 1);
 
-   if(emaTrend1 == 0 || emaFast1 == 0 || emaSlow1 == 0) return;
+   if(emaKeltner1 == 0 || atrKeltner1 == 0 || emaKeltner2 == 0 || atrKeltner2 == 0) return;
 
-   // Prices (use last closed bar)
-   double close1 = iClose(g_symbol, InpEntryTF, 1);
-   double open1  = iOpen(g_symbol, InpEntryTF, 1);
-   double low1   = iLow(g_symbol, InpEntryTF, 1);
-   double high1  = iHigh(g_symbol, InpEntryTF, 1);
-   double dailyClose1 = iClose(g_symbol, PERIOD_D1, 1);
-   double biasClose1  = iClose(g_symbol, InpBiasTF, 1);
+   // Prices
+   double close1 = iClose(_Symbol, InpEntryTF, 1);
+   double close2 = iClose(_Symbol, InpEntryTF, 2);
 
-   if(close1 == 0 || open1 == 0 || low1 == 0 || high1 == 0) return;
-   if(InpUseDailyTrendFilter && (dailyClose1 == 0 || emaDaily1 == 0)) return;
-   if(InpUseBiasFilter && (biasClose1 == 0 || emaBias1 == 0)) return;
+   if(close1 == 0 || close2 == 0) return;
+   if(InpUseDailyTrendFilter && emaDaily1 == 0) return;
 
-   // Trend direction
-   bool dailyUp   = (!InpUseDailyTrendFilter || dailyClose1 > emaDaily1);
-   bool dailyDown = (!InpUseDailyTrendFilter || dailyClose1 < emaDaily1);
-   bool biasUp    = (!InpUseBiasFilter || biasClose1 > emaBias1);
-   bool biasDown  = (!InpUseBiasFilter || biasClose1 < emaBias1);
-   bool upTrend   = (close1 > emaTrend1 && dailyUp && biasUp);
-   bool downTrend = (close1 < emaTrend1 && dailyDown && biasDown);
+   // Keltner Bands
+   double upperBand1 = emaKeltner1 + (atrKeltner1 * InpKeltnerMult);
+   double lowerBand1 = emaKeltner1 - (atrKeltner1 * InpKeltnerMult);
+   double upperBand2 = emaKeltner2 + (atrKeltner2 * InpKeltnerMult);
+   double lowerBand2 = emaKeltner2 - (atrKeltner2 * InpKeltnerMult);
 
-   // Pullback zone between EMA10 and EMA30 + candle confirmation
-   double zoneLow = MathMin(emaFast1, emaSlow1);
-   double zoneHigh = MathMax(emaFast1, emaSlow1);
-   bool inZone = (low1 <= zoneHigh && high1 >= zoneLow);
-   bool bullishBias = (close1 > open1) && (close1 > emaFast1);
-   bool bearishBias = (close1 < open1) && (close1 < emaFast1);
-   bool bullConfirmOk = (BullishConfirm(1) || bullishBias);
-   bool bearConfirmOk = (BearishConfirm(1) || bearishBias);
-   if(!InpUseCandleConfirm)
-   {
-      bullConfirmOk = true;
-      bearConfirmOk = true;
-   }
-   bool buySignal  = upTrend && inZone && bullConfirmOk;
-   bool sellSignal = downTrend && inZone && bearConfirmOk;
+   // Breakout Logic (Explosion Check)
+   bool buyBreakout  = (close1 > upperBand1 && close2 < upperBand2);
+   bool sellBreakout = (close1 < lowerBand1 && close2 > lowerBand2);
+
+   // Daily Trend Filter
+   bool dailyUp   = (!InpUseDailyTrendFilter || close1 > emaDaily1);
+   bool dailyDown = (!InpUseDailyTrendFilter || close1 < emaDaily1);
+
+   bool buySignal  = buyBreakout && dailyUp;
+   bool sellSignal = sellBreakout && dailyDown;
 
    if(!buySignal && !sellSignal) return;
 
@@ -719,24 +731,27 @@ void TryEnter()
    if(atr <= 0) return;
    if(!VolatilityOk(atr)) return;
 
-   int spread_points = (int)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD);
+   int spread_points = (int)SymbolInfoInteger(_Symbol, SYMBOL_SPREAD);
    double dynRiskPct = AdjustRiskPercent((double)spread_points, atr);
 
    double sl_dist = atr * InpSL_ATR_Mult;
 
    // Prices for order
-   double bid = SymbolInfoDouble(g_symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(g_symbol, SYMBOL_ASK);
-   int digits = (int)SymbolInfoInteger(g_symbol, SYMBOL_DIGITS);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
 
    double entry = buySignal ? ask : bid;
    double sl    = buySignal ? (entry - sl_dist) : (entry + sl_dist);
-   double tp    = buySignal ? (entry + sl_dist * InpTP_RR) : (entry - sl_dist * InpTP_RR);
+   double tp    = 0.0;
+   
+   if(InpTP_RR > 0.0)
+      tp = buySignal ? (entry + sl_dist * InpTP_RR) : (entry - sl_dist * InpTP_RR);
 
    sl = NormalizeDouble(sl, digits);
    tp = NormalizeDouble(tp, digits);
 
-   if(sl <= 0 || tp <= 0) return;
+   if(sl <= 0) return; // TP can be 0 now
    if(!StopsLevelOk(entry, sl, tp)) return;
 
    // Lot size by leverage (with risk cap)
@@ -748,9 +763,9 @@ void TryEnter()
 
    bool ok = false;
    if(buySignal)
-      ok = trade.Buy(lots, g_symbol, entry, sl, tp, "BootcampSafe BUY");
+      ok = trade.Buy(lots, _Symbol, entry, sl, tp, "BootcampSafe BUY");
    else if(sellSignal)
-      ok = trade.Sell(lots, g_symbol, entry, sl, tp, "BootcampSafe SELL");
+      ok = trade.Sell(lots, _Symbol, entry, sl, tp, "BootcampSafe SELL");
 
    if(ok)
    {
@@ -767,19 +782,17 @@ void TryEnter()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   g_symbol = ResolveSymbol();
-   if(!SymbolSelect(g_symbol, true))
+   if(!SymbolSelect(_Symbol, true))
       return(INIT_FAILED);
 
-   g_handleEmaTrend = iMA(g_symbol, InpEntryTF, InpEMATrendPeriod, 0, MODE_EMA, PRICE_CLOSE);
-   g_handleEmaFast  = iMA(g_symbol, InpEntryTF, InpEmaFastPeriod, 0, MODE_EMA, PRICE_CLOSE);
-   g_handleEmaSlow  = iMA(g_symbol, InpEntryTF, InpEmaSlowPeriod, 0, MODE_EMA, PRICE_CLOSE);
-   g_handleEmaDaily = iMA(g_symbol, PERIOD_D1, InpDailyEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
-   g_handleEmaBias  = iMA(g_symbol, InpBiasTF, InpBiasEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
-   if(g_handleEmaTrend == INVALID_HANDLE || g_handleEmaFast == INVALID_HANDLE ||
-      g_handleEmaSlow == INVALID_HANDLE || g_handleEmaDaily == INVALID_HANDLE ||
-      g_handleEmaBias == INVALID_HANDLE)
+   g_handleKeltnerMA  = iMA(_Symbol, InpEntryTF, InpKeltnerPeriod, 0, MODE_EMA, PRICE_CLOSE);
+   g_handleKeltnerATR = iATR(_Symbol, InpEntryTF, InpKeltnerPeriod);
+   g_handleDailyEMA   = iMA(_Symbol, PERIOD_D1, InpDailyEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
+
+   if(g_handleKeltnerMA == INVALID_HANDLE || g_handleKeltnerATR == INVALID_HANDLE || g_handleDailyEMA == INVALID_HANDLE)
       return(INIT_FAILED);
+
+   Print("BootcampSafeEA Keltner Breakout Loaded");
 
    g_last_bar_time = 0;
    g_last_close_time = 0;
@@ -814,7 +827,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
    long   magic = HistoryDealGetInteger(deal, DEAL_MAGIC);
    long   entry = HistoryDealGetInteger(deal, DEAL_ENTRY);
 
-   if(sym != g_symbol || magic != InpMagic)
+   if(sym != _Symbol || magic != InpMagic)
       return;
 
    if(entry != DEAL_ENTRY_OUT)
@@ -827,6 +840,8 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
    if(profit < 0)
       g_consec_losses++;
    else
+
+   
       g_consec_losses = 0;
 
    datetime t = (datetime)HistoryDealGetInteger(deal, DEAL_TIME);
