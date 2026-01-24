@@ -16,12 +16,12 @@ CPositionInfo pos;
 input ENUM_TIMEFRAMES InpTF       = PERIOD_H1;  // Legacy entry timeframe (unused)
 input ENUM_TIMEFRAMES InpEntryTF  = PERIOD_H1;  // Entry timeframe
 input ENUM_TIMEFRAMES InpBiasTF   = PERIOD_H4;  // Bias timeframe
-input double InpRiskPercent       = 1.0;        // Risk per trade (% of balance)
+input double InpRiskPercent       = 2.5;        // Risk per trade (% of balance)
 input int    InpKeltnerPeriod     = 12;         // Keltner Channel Period
-input double InpKeltnerMult       = 1.5;        // Keltner Channel Multiplier
+input double InpKeltnerMult       = 1.4;        // Keltner Channel Multiplier
 input int    InpDailyEmaPeriod    = 200;        // D1 trend filter EMA
 input int    InpATRPeriod         = 14;         // ATR for SL distance
-input double InpSL_ATR_Mult       = 1.8;        // SL = ATR * multiplier
+input double InpSL_ATR_Mult       = 2.0;        // SL = ATR * multiplier
 input double InpTP_RR             = 2.0;        // TP = RR * SL (0.0 = Infinite)
 input double InpTrailingAtrMult   = 1.5;        // Trailing stop ATR multiplier
 input double InpBreakevenTrigger_ATR = 1.0;     // Breakeven trigger (ATR mult)
@@ -36,7 +36,7 @@ input int    InpRolloverHourEnd   = 23;         // Skip trading until this hour
 input double InpMinAtrPips        = 5.0;        // Minimum ATR (pips)
 input int    InpMaxConsecLosses   = 5;          // Pause after consecutive losses
 input double InpMaxDailyLossPct   = 2.0;        // Daily equity loss cap (%)
-input double InpMaxDrawdownPct    = 4.0;        // Max drawdown (%)
+input double InpMaxDrawdownPct    = 15.0;        // Max drawdown (%)
 input int    InpMaxTradesPerDay   = 3;          // Max trades per day
 input int    InpInactivityDays    = 12;         // Relax filters after inactivity
 input double InpRelaxAtrFactor    = 0.5;        // ATR floor multiplier during relax
@@ -253,7 +253,7 @@ double CalcLotsByLeverageAndRisk(double sl_distance_price, double maxRiskPct)
    if(sl_distance_price <= 0) return 0.0;
 
    // SAFETY CAP: Risk-based maximum (prevent catastrophic loss)
-   double cappedRiskPct = MathMin(maxRiskPct, 1.0); // Enforce 1% hard cap
+   double cappedRiskPct = maxRiskPct; // Enforce user input risk
    double maxRiskLots = CalcMaxLotsByRisk(sl_distance_price, cappedRiskPct);
    
    // Use risk-based lots only (strict 1% cap priority)
