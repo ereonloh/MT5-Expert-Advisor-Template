@@ -67,6 +67,8 @@ int      g_consec_losses = 0;
 int      g_handleKeltnerMA  = INVALID_HANDLE;
 int      g_handleKeltnerATR = INVALID_HANDLE;
 int      g_handleDailyEMA   = INVALID_HANDLE;
+int      g_handleATR_Main   = INVALID_HANDLE; // For InpATRPeriod
+int      g_handleATR_D1     = INVALID_HANDLE; // For InpAtrVolPeriod
 
 //+------------------------------------------------------------------+
 //| Helpers                                                          |
@@ -120,17 +122,12 @@ bool HasOpenPosition()
 
 double GetATR(int period)
 {
-   int handle = iATR(_Symbol, InpEntryTF, period);
-   if(handle == INVALID_HANDLE) return 0.0;
+   if(g_handleATR_Main == INVALID_HANDLE) return 0.0;
 
    double buf[];
    ArraySetAsSeries(buf, true);
-   if(CopyBuffer(handle, 0, 0, 2, buf) < 2)
-   {
-      IndicatorRelease(handle);
+   if(CopyBuffer(g_handleATR_Main, 0, 0, 1, buf) < 1)
       return 0.0;
-   }
-   IndicatorRelease(handle);
    return buf[0];
 }
 
@@ -147,34 +144,33 @@ double GetEMAHandle(int handle, int shift)
 
 double GetATRValue(ENUM_TIMEFRAMES tf, int period, int shift)
 {
-   int handle = iATR(_Symbol, tf, period);
+   int handle = INVALID_HANDLE;
+   if(tf == PERIOD_D1 && period == InpAtrVolPeriod) handle = g_handleATR_D1;
+   else if(tf == InpEntryTF && period == InpATRPeriod) handle = g_handleATR_Main;
+
    if(handle == INVALID_HANDLE) return 0.0;
 
    double buf[];
    ArraySetAsSeries(buf, true);
    if(CopyBuffer(handle, 0, shift, 1, buf) < 1)
-   {
-      IndicatorRelease(handle);
       return 0.0;
-   }
-   IndicatorRelease(handle);
    return buf[0];
 }
 
 double GetATRAverage(ENUM_TIMEFRAMES tf, int period, int start_shift, int bars)
 {
    if(bars <= 0) return 0.0;
-   int handle = iATR(_Symbol, tf, period);
+   
+   int handle = INVALID_HANDLE;
+   if(tf == PERIOD_D1 && period == InpAtrVolPeriod) handle = g_handleATR_D1;
+   else if(tf == InpEntryTF && period == InpATRPeriod) handle = g_handleATR_Main;
+
    if(handle == INVALID_HANDLE) return 0.0;
 
    double buf[];
    ArraySetAsSeries(buf, true);
    if(CopyBuffer(handle, 0, start_shift, bars, buf) < bars)
-   {
-      IndicatorRelease(handle);
       return 0.0;
-   }
-   IndicatorRelease(handle);
 
    double sum = 0.0;
    for(int i = 0; i < bars; i++)
@@ -788,8 +784,10 @@ int OnInit()
    g_handleKeltnerMA  = iMA(_Symbol, InpEntryTF, InpKeltnerPeriod, 0, MODE_EMA, PRICE_CLOSE);
    g_handleKeltnerATR = iATR(_Symbol, InpEntryTF, InpKeltnerPeriod);
    g_handleDailyEMA   = iMA(_Symbol, PERIOD_D1, InpDailyEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
+   g_handleATR_Main   = iATR(_Symbol, InpEntryTF, InpATRPeriod);
+   g_handleATR_D1     = iATR(_Symbol, PERIOD_D1, InpAtrVolPeriod);
 
-   if(g_handleKeltnerMA == INVALID_HANDLE || g_handleKeltnerATR == INVALID_HANDLE || g_handleDailyEMA == INVALID_HANDLE)
+   if(g_handleKeltnerMA == INVALID_HANDLE || g_handleKeltnerATR == INVALID_HANDLE || g_handleDailyEMA == INVALID_HANDLE || g_handleATR_Main == INVALID_HANDLE || g_handleATR_D1 == INVALID_HANDLE)
       return(INIT_FAILED);
 
    Print("BootcampSafeEA Keltner Breakout Loaded");
