@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
-//|                                                   BootcampSafeEA |
-//|                      Minimal, risk-bounded MT5 EA (H1 EURUSD)    |
+//|                                                       LiveEA.mq5 |
+//|                      Aggressive MT5 EA (H1 Keltner Breakout)     |
 //+------------------------------------------------------------------+
 #property copyright "Public domain"
 #property version   "1.00"
@@ -759,9 +759,9 @@ void TryEnter()
 
    bool ok = false;
    if(buySignal)
-      ok = trade.Buy(lots, _Symbol, entry, sl, tp, "BootcampSafe BUY");
+      ok = trade.Buy(lots, _Symbol, entry, sl, tp, "LiveEA BUY");
    else if(sellSignal)
-      ok = trade.Sell(lots, _Symbol, entry, sl, tp, "BootcampSafe SELL");
+      ok = trade.Sell(lots, _Symbol, entry, sl, tp, "LiveEA SELL");
 
    if(ok)
    {
@@ -790,7 +790,7 @@ int OnInit()
    if(g_handleKeltnerMA == INVALID_HANDLE || g_handleKeltnerATR == INVALID_HANDLE || g_handleDailyEMA == INVALID_HANDLE || g_handleATR_Main == INVALID_HANDLE || g_handleATR_D1 == INVALID_HANDLE)
       return(INIT_FAILED);
 
-   Print("BootcampSafeEA Keltner Breakout Loaded");
+   Print("LiveEA Keltner Breakout Loaded");
 
    g_last_bar_time = 0;
    g_last_close_time = 0;

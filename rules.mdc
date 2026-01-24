@@ -1,32 +1,40 @@
-use any EA you have in your trading account, as long as it does not:
+# Rules & Compliance Constraints
 
-Copy trades of other person's signals
-Do tick scalping
-Perform latency arbitrage trading
-Perform reverse arbitrage trading
-Perform hedge arbitrage trading
-Perform High-frequency trading
-Use emulators
-Any accounts using these types of EAs will be canceled, banned, and not refunded.
-No grid / no martingale / no recovery / no news logic 
+## Prohibited Strategies (Strict Compliance)
+- **No Copy Trading**: Do not copy signals from other sources.
+- **No Tick Scalping**: Avoid strategies dependent on tick-level data anomalies.
+- **No Arbitrage**: Latency, reverse, or hedge arbitrage is strictly forbidden.
+- **No High-Frequency Trading (HFT)**: No rapid-fire opening/closing of positions.
+- **No Emulators**: Must run on standard MT5 environment.
+- **No Grid / Martingale / Recovery**: No increasing position size after losses; no grid networks.
+- **No News Logic**: Do not trade specifically on news events (though volatility filters are allowed).
 
-The stop-loss order has to be visible in the trading platform, so you cannot use a ‘stealth mode’ stop-loss.
+## Mandatory Requirements
+- **Visible Stop-Loss**: Every trade MUST have a physical SL order sent to the broker. No "stealth" or virtual stops.
+- **Risk Management**:
+  - **Position Sizing**: Based on fixed risk percentage or leverage-capped risk.
+  - **Daily Loss Cap**: Equity-based daily loss limit (e.g., 2.0% - 5.0%).
+  - **Drawdown Cap**: Global maximum drawdown limit.
+- **Execution**:
+  - **One Position Max**: Only one open trade per symbol/magic number at a time.
+  - **Timeframe**: H1 (1-Hour) charts.
+  - **New Bar Entry**: Logic runs only on bar open to avoid intra-bar noise.
 
-Must be compliant with 5ers prop trading and pass its bootcamp's Stage 1 requirements: $25k account → 6% profit target with non-strict guidelines below:
-
-EURUSD first (can be adapted to others like XAUUSD if needed)
-H1 only
-EMA200 trend filter
-Pullback entry (price crosses EMA20 back in trend direction)
-1 position max
-Mandatory SL/TP
-Position sizing = 1:X leverage (capped at 1% max risk per trade)
-Cooldown after a trade
-Max daily loss cap: 2% (equity-based)
-
-Multi-month tuning (opt-in, stays within prop rules):
-- Expand session window to capture more trades (e.g., 6–22 server time)
-- Reduce cooldown to 60–120 minutes
-- Increase max trades per day to 3–5
-- Lower min ATR floor slightly (e.g., 5.0 pips) or enable inactivity relax
-- Allow larger max drawdown guard for longer runs (e.g., 8–12%)
+## Strategy Specifications (Keltner Breakout)
+- **Trend Filter**: Daily EMA (e.g., 200-period) to determine bias.
+- **Entry Logic**: Keltner Channel Breakout.
+  - Buy: Close > Upper Band (and Daily Trend Up).
+  - Sell: Close < Lower Band (and Daily Trend Down).
+- **Exit Logic**:
+  - ATR-based Stop Loss.
+  - Risk:Reward based Take Profit.
+  - Trailing Stop (ATR-based).
+  - Breakeven Trigger (ATR-based).
+- **Filters**:
+  - **Spread Check**: Max spread in points.
+  - **Session Timer**: Trading allowed only within specific server hours.
+  - **Rollover Skip**: Avoid trading during swap rollover hours (e.g., 21:00-23:00).
+  - **Volatility Filter**: Min ATR check; High Volatility Pause.
+  - **Inactivity Relax**: Optional logic to loosen filters after days of no trading.
+  - **Cooldown**: Minimum wait time between trades.
+  - **Consecutive Loss Pause**: Pause trading after N consecutive losses.

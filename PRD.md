@@ -1,21 +1,20 @@
 # Product Requirements Document (PRD)
-ICmarketEA + BootcampSafeEA (MT5 Expert Advisors)
+LiveEA + BootcampEA (MT5 Expert Advisors)
 
 ## Overview
-This repository contains two MT5 Expert Advisors focused on prop-firm compliant, H1 EMA pullback trading with explicit risk controls and visible SL/TP. The design emphasizes capital preservation, rule compliance, and controlled exposure rather than high frequency trade volume.
+This repository contains two MT5 Expert Advisors focused on prop-firm compliant, H1 Keltner Channel Breakout trading with explicit risk controls and visible SL/TP. The design emphasizes capital preservation, rule compliance, and controlled exposure.
 
 Primary artifacts:
-- `ICmarketEA.mq5` (PropPullback_v2): IC Markets Raw optimized, controlled leverage + quality scoring.
-- `BootcampSafeEA.mq5`: conservative ATR-based strategy aligned with prop bootcamp rules.
-- `rules.mdc`: compliance constraints (no arb/HFT, no grid/martingale/recovery, visible SL/TP).
-- `README.md`: operational overview and testing checklist.
+- `LiveEA.mq5`: Aggressive configuration for live/personal accounts (higher risk, wider drawdowns).
+- `BootcampEA.mq5`: Conservative configuration for prop firm challenges (strict risk, tight drawdowns).
+- `rules.mdc`: Compliance constraints (no arb/HFT, no grid/martingale, visible SL/TP).
+- `README.md`: Operational overview and usage guide.
 
 ## Goals
-- Provide safe, prop-firm compliant automation for H1 EMA pullback trading.
-- Cap per-trade risk and daily loss to prevent rule breaches and account blowups.
-- Maintain transparent SL/TP (no stealth), no disallowed strategies (grid/martingale/arb/news).
-- Support controlled leverage and quality-based exposure in ICmarketEA.
-- Keep BootcampSafeEA conservative, ATR-based, and stress-aware.
+- Provide safe, prop-firm compliant automation for H1 Keltner Breakout trading.
+- Cap per-trade risk and daily loss to prevent rule breaches.
+- Maintain transparent SL/TP (no stealth), no disallowed strategies.
+- Adapt to market conditions using ATR-based volatility filters and dynamic risk adjustment.
 
 ## Non-Goals
 - High-frequency trading or tick scalping.
@@ -23,89 +22,43 @@ Primary artifacts:
 - Martingale, recovery, or grid logic.
 - Hidden/stealth stop-loss.
 
-## Compliance Requirements (from `rules.mdc`)
-- No copy trading.
-- No tick scalping, HFT, or any arb strategies.
-- No emulators.
-- No grid/martingale/recovery/news logic.
-- Visible SL/TP in platform.
-- One position max; H1 only; EMA200 trend filter; EMA20 pullback.
-- Leverage-based sizing allowed but capped at 1% risk per trade.
-- Daily loss cap: 2% (equity-based).
-
-## User Personas
-1) Trader/Operator
-   - Wants stable, rule-compliant performance and simple configuration.
-2) Developer/Maintainer
-   - Needs readable logic and clear testing/acceptance criteria.
-3) Prop Firm Compliance Reviewer
-   - Requires explicit safeguards and disallowed-strategy avoidance.
-
 ## Strategy Summary
-### ICmarketEA (PropPullback_v2)
-- Timeframe: H1.
-- Trend: EMA200 direction filter.
-- Entry: EMA20 pullback (wick or close proximity with volume confirmation).
-- Controlled leverage:
-  - Base leverage input (`InpLeverage`) for position sizing.
-  - Quality scoring (1–3) scales leverage; capped at 1% max risk.
-- Risk caps:
-  - 1% max risk per trade (hard cap in leverage sizing).
-  - 2% daily loss cap (equity-based).
-- Spread handling:
-  - 3-sample spread average filter + hard cap.
-  - Entry tax: reduce lots 20% if spread near max.
-- Guardrails:
-  - Session window + rollover skip.
-  - Max trades per day, loss-streak pause, cooldown.
-  - New-bar only execution.
+### Core Logic (Shared)
+- **Timeframe**: H1.
+- **Trend**: Daily EMA (default 200) defines the directional bias.
+- **Entry**: Breakout of Keltner Channels (EMA + ATR bands).
+  - Buy if Close > Upper Band AND Price > Daily EMA.
+  - Sell if Close < Lower Band AND Price < Daily EMA.
+- **Exit**:
+  - Initial SL based on ATR (e.g., 2.0 * ATR).
+  - TP based on Risk:Reward ratio (e.g., 2.0 * SL).
+  - Trailing Stop (ATR-based).
+  - Breakeven trigger (ATR-based).
+- **Filters**:
+  - Session window (Start/End hour).
+  - Rollover skip (avoid high spreads).
+  - Max Spread check.
+  - Min ATR (avoid dead markets).
+  - High Volatility Pause (avoid news spikes).
+  - Cooldown (wait after close).
+  - Consecutive Loss Pause.
 
-### BootcampSafeEA
-- Timeframe: H1 (EURUSD default).
-- Trend: EMA200 filter.
-- Entry: EMA20 pullback.
-- SL/TP: ATR-based SL, RR-based TP.
-- Risk controls:
-  - Fixed fractional risk per trade (default 0.25%).
-  - Daily loss cap, drawdown cap, trades/day cap.
-  - Stress trim (risk reduction on high spread/vol).
-  - Inactivity relax (loosen ATR floor after long inactivity).
-- Guardrails:
-  - Session window + rollover skip.
-  - Loss-streak pause, cooldown.
-  - New-bar only execution.
+### LiveEA (Aggressive)
+- **Risk**: Higher default risk (e.g., 2.5% per trade).
+- **Drawdown**: Wider max drawdown tolerance (e.g., 15%).
+- **Leverage**: Lower leverage setting (5.0) - *Note: Leverage input acts as a cap/sizing mechanism.*
 
-## Core Features
-### Shared
-- EMA200 trend filter; EMA20 pullback entry.
-- H1 only; one position per symbol/magic.
-- Visible SL/TP; broker stop-level check.
-- Spread filtering and slippage control.
-- Cooldown, loss-streak pause, trades/day cap.
-
-### ICmarketEA-only
-- Controlled leverage with quality-based scaling.
-- Quality score (1–3) based on slope + momentum confirmation.
-- Entry tax near max spread.
-- Daily loss cap (2%).
-
-### BootcampSafeEA-only
-- ATR-based SL/TP and RR targeting.
-- Stress trim and inactivity relax.
-- Drawdown cap (global) and daily loss cap.
+### BootcampEA (Conservative)
+- **Risk**: Strict risk (e.g., 2.0% per trade).
+- **Drawdown**: Tight max drawdown (e.g., 4.9%) to pass prop challenges.
+- **Leverage**: Higher leverage setting (10.0) allowed by logic, but constrained by risk % cap.
 
 ## Inputs (Highlights)
-### ICmarketEA
-- Risk: `InpRiskPerTrade` (base), `InpLeverage`, `InpMaxDailyLossPct`.
-- Spread: `InpMaxSpreadPips`, `InpSpreadMult`, `InpMaxSlippage`.
-- Session: `InpStartHour`, `InpEndHour`, `InpRolloverHourStart/End`.
-- Guards: `InpMaxTradesPerDay`, `InpMaxConsecLosses`, `InpCooldownMinutes`.
-
-### BootcampSafeEA
-- Risk: `InpRiskPercent`, `InpMaxDailyLossPct`, `InpMaxDrawdownPct`.
-- Volatility: `InpATRPeriod`, `InpSL_ATR_Mult`, `InpMinAtrPips`.
-- Stress trim: `InpRiskTrimFactor`, `InpHighVolAtrMult`, `InpHighSpreadFactor`.
-- Session: `InpStartHour`, `InpEndHour`, `InpRolloverHourStart/End`.
+- **Risk**: `InpRiskPercent`, `InpMaxDailyLossPct`, `InpMaxDrawdownPct`.
+- **Strategy**: `InpKeltnerPeriod`, `InpKeltnerMult`, `InpDailyEmaPeriod`.
+- **Exits**: `InpATRPeriod`, `InpSL_ATR_Mult`, `InpTP_RR`, `InpTrailingAtrMult`.
+- **Filters**: `InpStartHour`, `InpEndHour`, `InpRolloverHourStart/End`, `InpMaxSpreadPoints`.
+- **Advanced**: `InpInactivityDays` (relax filters), `InpRiskTrimFactor` (stress management).
 
 ## Acceptance Criteria
 ### Compliance
@@ -114,25 +67,11 @@ Primary artifacts:
 - Visible SL/TP on all orders.
 
 ### Risk and Safety
-- ICmarketEA: max per-trade risk <= 1%; daily equity loss cap at 2%.
-- BootcampSafeEA: daily loss cap and drawdown cap enforced.
+- **BootcampEA**: Max drawdown < 5%, Daily loss < 2% (configurable).
+- **LiveEA**: Max drawdown < 15%, Daily loss < 2%.
 - Spread cap and stop-level checks prevent invalid orders.
 
 ### Behavior
 - Trades only on new H1 bars.
 - Entries blocked outside session or during rollover.
 - One position max per symbol/magic.
-- Quality-based leverage scaling only in ICmarketEA.
-
-## Testing Checklist
-- Validate spread filtering and entry tax behavior with spread spikes.
-- Ensure daily loss cap blocks new entries after 2% equity drawdown.
-- Confirm quality score changes risk scaling in ICmarketEA.
-- Verify SL/TP respects broker stop levels.
-- Check loss-streak pause and cooldown enforcement.
-- Confirm no trades during rollover window.
-
-## Open Questions
-- Should leverage be disabled by default for certain prop firm profiles?
-- Should daily loss cap be configurable per prop firm (default 2%)?
-

@@ -763,9 +763,9 @@ void TryEnter()
 
    bool ok = false;
    if(buySignal)
-      ok = trade.Buy(lots, _Symbol, entry, sl, tp, "BootcampSafe BUY");
+      ok = trade.Buy(lots, _Symbol, entry, sl, tp, "BootcampEA BUY");
    else if(sellSignal)
-      ok = trade.Sell(lots, _Symbol, entry, sl, tp, "BootcampSafe SELL");
+      ok = trade.Sell(lots, _Symbol, entry, sl, tp, "BootcampEA SELL");
 
    if(ok)
    {
@@ -792,7 +792,7 @@ int OnInit()
    if(g_handleKeltnerMA == INVALID_HANDLE || g_handleKeltnerATR == INVALID_HANDLE || g_handleDailyEMA == INVALID_HANDLE)
       return(INIT_FAILED);
 
-   Print("BootcampSafeEA Keltner Breakout Loaded");
+   Print("BootcampEA Keltner Breakout Loaded");
 
    g_last_bar_time = 0;
    g_last_close_time = 0;
