@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EA Strategy Visualization</title>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ startOnLoad: true });
+    </script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 { color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        h2 { color: #34495e; margin-top: 30px; }
+        .mermaid {
+            display: flex;
+            justify-content: center;
+            margin: 30px 0;
+            background-color: #fff;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 20px 0;
+        }
+        th, td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+        }
+        th { background-color: #f8f9fa; }
+        .note {
+            background-color: #e8f4f8;
+            padding: 15px;
+            border-left: 4px solid #3498db;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Expert Advisor Strategy Visualization</h1>
+        
+        <p>This document provides a visual representation of the logic used in the MT5 Expert Advisors (<code>ADXLiveEA</code>, <code>LiveEA</code>, <code>BootcampEA</code>).</p>
+
+        <div class="note">
+            <strong>Core Strategy:</strong> Keltner Channel Breakout aligned with the daily trend. The main difference lies in the <strong>ADX Filter</strong> used in <code>ADXLiveEA</code> for higher quality setups.
+        </div>
+
+        <div class="mermaid">
+flowchart TD
+    Start([New Candle on H1]) --> PreChecks
+    
+    subgraph PreChecks ["Safety & Environment Checks"]
+        Check1{"Spread < Max?"}
+        Check2{"Time in Session?"}
+        Check3{"Not in Rollover?"}
+        Check4{"Risk Limits OK?"}
+        Check5{"Not in Cooldown?"}
+        
+        Check1 -- No --> Wait["Wait for next Tick"]
+        Check2 -- No --> Wait
+        Check3 -- No --> Wait
+        Check4 -- No --> Wait
+        Check5 -- No --> Wait
+    end
+    
+    PreChecks --> TrendFilter
+    
+    subgraph TrendFilter ["Daily Trend Direction"]
+        D1_EMA{"Price > Daily EMA 200?"}
+        D1_EMA -- Yes --> Bullish["Bullish Bias"]
+        D1_EMA -- No --> Bearish["Bearish Bias"]
+    end
+    
+    Bullish --> SignalCheckBuy
+    Bearish --> SignalCheckSell
+    
+    subgraph SignalCheckBuy ["Buy Signal Logic"]
+        KeltnerBuy{"Close > Upper Band<br/>AND<br/>Prev Close < Upper Band?"}
+    end
+    
+    subgraph SignalCheckSell ["Sell Signal Logic"]
+        KeltnerSell{"Close < Lower Band<br/>AND<br/>Prev Close > Lower Band?"}
+    end
+    
+    SignalCheckBuy -- Yes --> ADXCheck{"ADX Filter?"}
+    SignalCheckSell -- Yes --> ADXCheck
+    
+    SignalCheckBuy -- No --> Wait
+    SignalCheckSell -- No --> Wait
+    
+    subgraph ADXCheck ["ADX Filter (ADXLiveEA Only)"]
+        IsADXEA{"Is ADXLiveEA?"}
+        IsADXEA -- Yes --> CheckADX{"ADX > Threshold (25)?"}
+        IsADXEA -- No --> CalculateRisk
+        CheckADX -- Yes --> CalculateRisk
+        CheckADX -- No --> Wait
+    end
+    
+    subgraph CalculateRisk ["Position Sizing"]
+        CalcSL["Calculate SL Distance (ATR * Mult)"]
+        CalcTP["Calculate TP Distance (SL * RR)"]
+        CalcLots["Calculate Lot Size based on Risk %"]
+    end
+    
+    CalculateRisk --> Execution
+    
+    subgraph Execution ["Trade Execution"]
+        SendOrder["Send Buy/Sell Order"]
+    end
+    
+    Execution --> Management
+    
+    subgraph Management ["Trade Management (OnTick)"]
+        TrailSL{"Price moved X ATR?"}
+        TrailSL -- Yes --> MoveSL["Move SL to Lock Profit"]
+        
+        BreakEven{"Price > Trigger Distance?"}
+        BreakEven -- Yes --> MoveBE["Move SL to Breakeven"]
+        
+        TimeExit{"Friday Close / Session End?"}
+        TimeExit -- Yes --> ClosePos["Close All Positions"]
+    end
+        </div>
+
+        <h2>Key Parameters</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Parameter</th>
+                    <th>Description</th>
+                    <th>Typical Value</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr><td><strong>Timeframe</strong></td><td>Entry Chart Timeframe</td><td>H1</td></tr>
+                <tr><td><strong>Daily EMA</strong></td><td>Trend Filter Period</td><td>200</td></tr>
+                <tr><td><strong>Keltner Period</strong></td><td>Channel Period</td><td>12</td></tr>
+                <tr><td><strong>Keltner Mult</strong></td><td>Channel Width Multiplier</td><td>1.0 - 1.4</td></tr>
+                <tr><td><strong>ATR Period</strong></td><td>Volatility Measure</td><td>14</td></tr>
+                <tr><td><strong>Risk %</strong></td><td>Risk per trade</td><td>2.0% - 2.5%</td></tr>
+                <tr><td><strong>ADX Threshold</strong></td><td>Trend Strength (ADXLiveEA only)</td><td>25</td></tr>
+            </tbody>
+        </table>
+
+        <h2>Logic Summary</h2>
+        <ol>
+            <li><strong>Trend Filter</strong>: We only trade in the direction of the long-term trend (Daily EMA 200).</li>
+            <li><strong>Entry Signal</strong>: We enter when price "explodes" out of the Keltner Channel (Breakout).</li>
+            <li><strong>Validation</strong>:
+                <ul>
+                    <li><strong>LiveEA / BootcampEA</strong>: Takes the trade immediately if safety checks pass.</li>
+                    <li><strong>ADXLiveEA</strong>: Waits for ADX > 25 to confirm a strong trend before entering.</li>
+                </ul>
+            </li>
+            <li><strong>Exit</strong>:
+                <ul>
+                    <li><strong>Stop Loss</strong>: Dynamic based on ATR (Volatility).</li>
+                    <li><strong>Take Profit</strong>: Fixed Risk:Reward ratio (e.g., 1:2).</li>
+                    <li><strong>Trailing Stop</strong>: Locks in profits as price moves in our favor.</li>
+                </ul>
+            </li>
+        </ol>
+    </div>
+</body>
+</html>
